@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# uv
+.uv/
+
+# env / secrets
+.env
+*.env
+credentials.json
+cookies.txt
+
+# test artifacts
+.pytest_cache/
+*.html
+*.log
+
+# OS
+.DS_Store
