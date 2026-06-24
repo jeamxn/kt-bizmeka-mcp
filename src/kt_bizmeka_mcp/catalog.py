@@ -61,6 +61,75 @@ CATALOG: Dict[str, ToolDoc] = {
         "returns": '{"ok": true, "authenticated": bool, "logged_in": bool, "portal_url": "..."}',
         "notes": "로그인 완료 후 세션이 살아있는지 확인할 때 사용.",
     },
+    "bizmeka_mail_folders": {
+        "summary": "웹메일 메일함(폴더) 목록과 메일 수 조회.",
+        "args": {"session_id": "로그인된 세션 ID"},
+        "returns": '{"ok": true, "folders": [{folderKey, folderName, mailcount, newmailcount}, ...]}',
+        "notes": "첫 메일 작업 전에 폴더 구조/안읽은 메일 수를 파악할 때 사용.",
+    },
+    "bizmeka_mail_list": {
+        "summary": "메일함의 메일 목록 조회.",
+        "args": {
+            "session_id": "로그인된 세션 ID",
+            "folder": "inbox/sent/drafts/spam/trash/tome/forever/auth (기본 inbox)",
+            "page": "페이지 번호 (기본 1)",
+        },
+        "returns": '{"ok": true, "maillist": [{ukey, subject, fromaddr, senddate, ...}], "page": {...}}',
+        "notes": "각 메일의 ukey 를 bizmeka_mail_view 에 넘겨 상세를 본다.",
+    },
+    "bizmeka_mail_view": {
+        "summary": "특정 메일의 본문/발신자/수신자/첨부 정보 조회.",
+        "args": {
+            "session_id": "로그인된 세션 ID",
+            "ukey": "메일 고유키 (mail_list 결과)",
+            "folder": "메일이 속한 폴더 (기본 inbox)",
+        },
+        "returns": '{"ok": true, "mail": {from, to, subject, content, date, attachList, ...}}',
+        "notes": "content 는 HTML. 답장하려면 이 ukey 를 mail_send 의 reply_ukey 로 넘긴다.",
+    },
+    "bizmeka_mail_mark_read": {
+        "summary": "메일을 읽음/안읽음으로 표시.",
+        "args": {
+            "session_id": "로그인된 세션 ID",
+            "ukeys": "대상 메일 ukey 목록 (배열)",
+            "seen": "True=읽음, False=안읽음 (기본 True)",
+        },
+        "returns": '{"ok": true}',
+        "notes": "",
+    },
+    "bizmeka_mail_check_receivers": {
+        "summary": "발송 전 수신자 주소 유효성 검증.",
+        "args": {"session_id": "세션 ID", "to": "받는사람", "cc": "참조", "bcc": "숨은참조"},
+        "returns": '{"ok": true, "result": {...}}',
+        "notes": "mail_send 전에 호출해 주소 오류를 미리 거른다 (선택).",
+    },
+    "bizmeka_mail_send": {
+        "summary": "메일 발송 (신규 또는 답장). 실제 발송되는 부작용 있음.",
+        "args": {
+            "session_id": "로그인된 세션 ID",
+            "to": '받는사람. \'"이름" <a@b.com>\' 또는 a@b.com, 여러명 콤마',
+            "subject": "제목",
+            "body": "본문 (HTML 허용)",
+            "cc": "참조 (선택)",
+            "bcc": "숨은참조 (선택)",
+            "reply_ukey": "답장일 경우 원본 메일 ukey (선택)",
+            "is_receipt": "수신확인 요청 여부 (기본 False)",
+        },
+        "returns": '{"ok": true, "result": {...}}',
+        "notes": "실제 메일이 나간다. 호출 전 수신자/제목/본문을 사용자에게 확인받을 것.",
+    },
+    "bizmeka_mail_receipts": {
+        "summary": "보낸 메일의 수신확인(읽음) 상태 목록 조회.",
+        "args": {"session_id": "세션 ID", "page": "페이지", "search": "검색어(선택)"},
+        "returns": '{"ok": true, "receiptlist": [{mail_key, read_date, available_cancel, ...}]}',
+        "notes": "available_cancel=1 인 메일만 mail_cancel_send 로 취소 가능.",
+    },
+    "bizmeka_mail_cancel_send": {
+        "summary": "아직 읽지 않은 보낸 메일의 발송 취소.",
+        "args": {"session_id": "세션 ID", "mail_key": "취소할 메일의 mail_key (receipts 결과)"},
+        "returns": '{"ok": true, "result": {...}}',
+        "notes": "수신자가 읽기 전에만 가능. mail_receipts 의 available_cancel 로 확인.",
+    },
 }
 
 
@@ -79,6 +148,27 @@ WORKFLOWS: Dict[str, Workflow] = {
             "(사용자가 휴대폰 SMS 인증번호 확인)",
             "bizmeka_verify_otp(session_id, cert_key) → 2차 인증 + SSO, 포털 진입",
             "bizmeka_session_status(session_id)       → (선택) 로그인 상태 확인",
+        ],
+    },
+    "read_mail": {
+        "title": "메일 읽기",
+        "description": "로그인 완료된 session_id 로 웹메일을 조회한다. 첫 메일 호출 시 자동으로 웹메일 SSO 진입 + _csrf 토큰을 확보한다.",
+        "steps": [
+            "bizmeka_mail_folders(session_id)              → 메일함/안읽은 수 확인",
+            "bizmeka_mail_list(session_id, folder='inbox') → 메일 목록 + 각 ukey",
+            "bizmeka_mail_view(session_id, ukey)           → 본문 상세",
+            "bizmeka_mail_mark_read(session_id, [ukey])    → (선택) 읽음 처리",
+        ],
+    },
+    "send_mail": {
+        "title": "메일 발송 / 답장",
+        "description": "실제 메일이 나가므로, 발송 전 사용자 확인을 권장한다. 답장은 원본 ukey 를 reply_ukey 로 넘긴다.",
+        "steps": [
+            "(답장이면) bizmeka_mail_list/view 로 원본 ukey 확보",
+            "bizmeka_mail_check_receivers(session_id, to)  → (선택) 주소 검증",
+            "bizmeka_mail_send(session_id, to, subject, body, reply_ukey=...) → 발송",
+            "bizmeka_mail_receipts(session_id)             → 수신확인 상태",
+            "bizmeka_mail_cancel_send(session_id, mail_key) → (필요시) 발송취소",
         ],
     },
 }

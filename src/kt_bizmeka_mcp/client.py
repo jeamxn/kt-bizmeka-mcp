@@ -22,6 +22,7 @@ from .crypto import RSAEncryptor
 
 SSO_BASE = "https://ezsso.bizmeka.com"
 PORTAL_BASE = "https://ezportal.bizmeka.com"
+WEBMAIL_BASE = "https://ezwebmail.bizmeka.com"
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -64,6 +65,7 @@ class BizmekaClient:
     timeout: float = 20.0
     _client: httpx.Client = field(init=False, repr=False)
     _ctx: Optional[LoginContext] = field(default=None, init=False, repr=False)
+    _webmail_csrf: Optional[str] = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._client = httpx.Client(
@@ -265,25 +267,50 @@ class BizmekaClient:
     def _extract_saml_form(html: str):
         """Return (action_url, {field: value}) for a SAML auto-post form, or None.
 
-        The action URL arrives HTML-entity-encoded (e.g. ``https&#x3a;&#x2f;...``)
-        so we unescape it before use.
+        Handles both directions of the SAML dance:
+          * IdP -> SP: form carries ``SAMLResponse`` (login finalize, portal entry)
+          * SP -> IdP: form carries ``SAMLRequest`` + ``RelayState`` (entering a
+            new service like webmail while already authenticated)
+
+        The action URL and field values arrive HTML-entity-encoded
+        (e.g. ``https&#x3a;&#x2f;...``) so we unescape them.
         """
-        if "SAMLResponse" not in html:
+        if "SAMLResponse" not in html and "SAMLRequest" not in html:
             return None
         action_m = re.search(r'<form[^>]+action="([^"]+)"', html, re.I)
-        action = (
-            unescape(action_m.group(1))
-            if action_m
-            else f"{PORTAL_BASE}/sso/assertionConsumer.do"
-        )
+        if not action_m:
+            return None
+        action = unescape(action_m.group(1))
         fields = {}
         for m in re.finditer(
             r'<input[^>]+name="([^"]+)"[^>]*value="([^"]*)"', html, re.I
         ):
             fields[unescape(m.group(1))] = unescape(m.group(2))
-        if "SAMLResponse" not in fields:
+        if "SAMLResponse" not in fields and "SAMLRequest" not in fields:
             return None
         return action, fields
+
+    def _follow_saml_chain(self, html: str, referer: str, max_hops: int = 6) -> str:
+        """Given an HTML body that may contain a SAML auto-post form, submit it
+        and keep following any further SAML auto-post forms / redirects until a
+        normal page is reached. Returns the final HTML body."""
+        body = html
+        for _ in range(max_hops):
+            saml = self._extract_saml_form(body)
+            if not saml:
+                return body
+            action, fields = saml
+            r = self._client.post(
+                action,
+                data=fields,
+                headers={"Content-Type": "application/x-www-form-urlencoded",
+                         "Referer": referer},
+                follow_redirects=True,
+            )
+            body = r.text
+            referer = str(r.url)
+        return body
+
 
     def _ajax_headers(self) -> dict:
         if not self._ctx:
@@ -303,4 +330,64 @@ class BizmekaClient:
 
     @property
     def is_logged_in(self) -> bool:
-        return self._client.cookies.get("isLogin") == "Y"
+        return any(
+            ck.name == "isLogin" and ck.value == "Y"
+            for ck in self._client.cookies.jar
+        )
+
+    # -- cookie persistence (debug / multi-step reuse) ---------------------
+    def dump_cookies(self) -> list[dict]:
+        """Serialize the cookie jar (name/value/domain/path) for later reuse."""
+        return [
+            {"name": c.name, "value": c.value, "domain": c.domain, "path": c.path}
+            for c in self._client.cookies.jar
+        ]
+
+    def load_cookies(self, cookies: list[dict]) -> None:
+        for c in cookies:
+            self._client.cookies.set(
+                c["name"], c["value"], domain=c.get("domain", ""), path=c.get("path", "/")
+            )
+
+    # ===================== WEBMAIL (ezwebmail) ============================
+    def enter_webmail(self) -> str:
+        """Enter the webmail service via SAML SP-initiated SSO and return the
+        Spring Security ``_csrf`` token used by the mail JSON APIs.
+
+        Flow:
+          GET /mail/list.do  -> SAMLRequest auto-post form (to ezsso ssoLogin.do)
+          (follow the SAML chain; we're already authenticated at the IdP)
+          -> lands on the real mail list page which embeds the _csrf token
+        """
+        r = self._client.get(
+            f"{WEBMAIL_BASE}/mail/list.do?_entityId=ezwebmail.bizmeka.com",
+            follow_redirects=True,
+        )
+        body = self._follow_saml_chain(r.text, referer=f"{WEBMAIL_BASE}/")
+        token = self._extract_webmail_csrf(body)
+        if not token:
+            # fetch the list page once more now that the session is established
+            r2 = self._client.get(
+                f"{WEBMAIL_BASE}/mail/list.do?_entityId=ezwebmail.bizmeka.com",
+                follow_redirects=True,
+            )
+            body = r2.text
+            token = self._extract_webmail_csrf(body)
+        if not token:
+            raise BizmekaError("웹메일 진입 실패: _csrf 토큰을 찾지 못했습니다.")
+        self._webmail_csrf = token
+        return token
+
+    @staticmethod
+    def _extract_webmail_csrf(html: str) -> str:
+        for pat in (
+            r'name="_csrf"\s+value="([0-9a-f-]{36})"',
+            r'"_csrf"\s*:\s*"([0-9a-f-]{36})"',
+            r'_csrf["\']?\s*[:=]\s*["\']([0-9a-f-]{36})["\']',
+            r'\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b',
+        ):
+            m = re.search(pat, html)
+            if m:
+                return m.group(1)
+        return ""
+

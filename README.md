@@ -23,8 +23,16 @@ bizmeka_man(tool="bizmeka_login_start")  # 특정 툴 상세 사용법
 | `bizmeka_login_start` | 1차 인증(RSA 암호화) 후 등록 휴대폰으로 SMS 인증번호 발송 |
 | `bizmeka_verify_otp` | SMS 인증번호로 2차 인증 + SAML SSO → 포털 진입 |
 | `bizmeka_session_status` | 세션 로그인 상태 확인 |
+| `bizmeka_mail_folders` | 웹메일 메일함(폴더) 목록 + 메일 수 |
+| `bizmeka_mail_list` | 메일함의 메일 목록 (inbox/sent/drafts/spam/trash/tome/...) |
+| `bizmeka_mail_view` | 특정 메일 본문/발신자/수신자/첨부 조회 |
+| `bizmeka_mail_mark_read` | 메일 읽음/안읽음 표시 |
+| `bizmeka_mail_check_receivers` | 발송 전 수신자 주소 검증 |
+| `bizmeka_mail_send` | 메일 발송 / 답장 (실제 발송 부작용 주의) |
+| `bizmeka_mail_receipts` | 보낸 메일 수신확인(읽음) 상태 |
+| `bizmeka_mail_cancel_send` | 안읽은 보낸 메일 발송 취소 |
 
-> 포털 기능 툴은 이후 추가 예정. 새 툴을 붙일 때는 `catalog.py`의 `CATALOG`/`WORKFLOWS`에 등록하면 `bizmeka_man`에 자동 반영된다.
+> 웹메일(`ezwebmail.bizmeka.com`)은 포털과 별도 도메인이며, 첫 메일 툴 호출 시 SP-initiated SAML SSO로 자동 진입하고 Spring Security `_csrf` 토큰을 캡처한다. 새 툴을 붙일 때는 `catalog.py`의 `CATALOG`/`WORKFLOWS`에 등록하면 `bizmeka_man`에 자동 반영된다.
 
 ## 로그인 워크플로우
 
@@ -94,7 +102,8 @@ mcp_servers:
 ```
 src/kt_bizmeka_mcp/
   crypto.py    RSA(PKCS#1 v1.5) 암호화 — jsbn 호환
-  client.py    bizmeka 로그인 HTTP 흐름 (1차/2차/SSO)
+  client.py    bizmeka 로그인 HTTP 흐름 (1차/2차/SSO) + 웹메일 SAML 진입
+  mail.py      웹메일 메일 작업 (목록/상세/발송/답장/수신확인/발송취소)
   session.py   진행중 로그인 세션 메모리 보관 (TTL)
   catalog.py   툴 카탈로그 + 워크플로우 (man 툴의 데이터 소스)
   server.py    FastMCP 진입점 + 툴 정의

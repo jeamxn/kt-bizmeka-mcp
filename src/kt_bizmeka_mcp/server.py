@@ -19,6 +19,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .catalog import render_overview, render_tool
 from .client import BizmekaClient, BizmekaError
+from . import mail
 from .session import store
 
 INSTRUCTIONS = (
@@ -145,6 +146,204 @@ def bizmeka_session_status(session_id: str) -> dict:
         "logged_in": sess.client.is_logged_in,
         "portal_url": sess.portal_url,
     }
+
+
+# ===================== WEBMAIL TOOLS ===================================
+def _logged_in_client(session_id: str):
+    """Resolve an authenticated client from a session, or return an error dict."""
+    sess = store.get(session_id)
+    if sess is None:
+        return None, {"ok": False, "error": "세션이 만료되었거나 존재하지 않습니다. 다시 로그인하세요."}
+    if not sess.client.is_logged_in:
+        return None, {"ok": False, "error": "로그인되지 않은 세션입니다."}
+    return sess.client, None
+
+
+@mcp.tool()
+def bizmeka_mail_folders(session_id: str) -> dict:
+    """웹메일 메일함(폴더) 목록과 메일 수를 조회한다.
+
+    Args:
+        session_id: 로그인된 세션 ID
+    """
+    client, err = _logged_in_client(session_id)
+    if err:
+        return err
+    try:
+        return {"ok": True, "folders": mail.list_folders(client)}
+    except BizmekaError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"요청 실패: {e}"}
+
+
+@mcp.tool()
+def bizmeka_mail_list(
+    session_id: str, folder: str = "inbox", page: int = 1
+) -> dict:
+    """메일함의 메일 목록을 조회한다.
+
+    Args:
+        session_id: 로그인된 세션 ID
+        folder: inbox/sent/drafts/spam/trash/tome/forever/auth 중 하나 (기본 inbox)
+        page: 페이지 번호 (기본 1)
+    """
+    client, err = _logged_in_client(session_id)
+    if err:
+        return err
+    try:
+        return {"ok": True, **mail.list_mails(client, folder, page)}
+    except BizmekaError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"요청 실패: {e}"}
+
+
+@mcp.tool()
+def bizmeka_mail_view(session_id: str, ukey: str, folder: str = "inbox") -> dict:
+    """특정 메일의 본문/발신자/수신자/첨부 정보를 조회한다.
+
+    Args:
+        session_id: 로그인된 세션 ID
+        ukey: 메일 고유키 (bizmeka_mail_list 결과의 ukey)
+        folder: 메일이 속한 폴더 (기본 inbox)
+    """
+    client, err = _logged_in_client(session_id)
+    if err:
+        return err
+    try:
+        return {"ok": True, "mail": mail.view_mail(client, ukey, folder)}
+    except BizmekaError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"요청 실패: {e}"}
+
+
+@mcp.tool()
+def bizmeka_mail_mark_read(
+    session_id: str, ukeys: list[str], seen: bool = True
+) -> dict:
+    """메일을 읽음(seen=True) 또는 안읽음(seen=False)으로 표시한다.
+
+    Args:
+        session_id: 로그인된 세션 ID
+        ukeys: 대상 메일 ukey 목록
+        seen: True=읽음, False=안읽음
+    """
+    client, err = _logged_in_client(session_id)
+    if err:
+        return err
+    try:
+        ok = mail.mark_read(client, ukeys, seen)
+        return {"ok": ok}
+    except BizmekaError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"요청 실패: {e}"}
+
+
+@mcp.tool()
+def bizmeka_mail_send(
+    session_id: str,
+    to: str,
+    subject: str,
+    body: str,
+    cc: str = "",
+    bcc: str = "",
+    reply_ukey: str = "",
+    is_receipt: bool = False,
+) -> dict:
+    """메일을 발송한다. (신규 발송 또는 답장)
+
+    주의: 실제로 메일이 발송되는 부작용이 있다. 호출 전 수신자/제목/본문을
+    사용자에게 확인받는 것을 권장한다.
+
+    Args:
+        session_id: 로그인된 세션 ID
+        to: 받는사람. 형식 '"이름" <a@b.com>' 또는 'a@b.com', 여러명은 콤마 구분
+        subject: 제목
+        body: 본문 (HTML 허용)
+        cc: 참조 (선택)
+        bcc: 숨은참조 (선택)
+        reply_ukey: 답장일 경우 원본 메일 ukey (선택)
+        is_receipt: 수신확인 요청 여부
+    """
+    client, err = _logged_in_client(session_id)
+    if err:
+        return err
+    try:
+        res = mail.send_mail(
+            client, to=to, subject=subject, body=body, cc=cc, bcc=bcc,
+            reply_ukey=reply_ukey or None, is_receipt=is_receipt,
+        )
+        return {"ok": True, "result": res}
+    except BizmekaError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"요청 실패: {e}"}
+
+
+@mcp.tool()
+def bizmeka_mail_check_receivers(
+    session_id: str, to: str, cc: str = "", bcc: str = ""
+) -> dict:
+    """발송 전 수신자 주소 유효성을 검증한다.
+
+    Args:
+        session_id: 로그인된 세션 ID
+        to/cc/bcc: 검증할 수신자 주소
+    """
+    client, err = _logged_in_client(session_id)
+    if err:
+        return err
+    try:
+        return {"ok": True, "result": mail.check_receivers(client, to, cc, bcc)}
+    except BizmekaError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"요청 실패: {e}"}
+
+
+@mcp.tool()
+def bizmeka_mail_receipts(session_id: str, page: int = 1, search: str = "") -> dict:
+    """보낸 메일의 수신확인(읽음) 상태 목록을 조회한다.
+
+    Args:
+        session_id: 로그인된 세션 ID
+        page: 페이지 번호
+        search: 검색어 (선택)
+    """
+    client, err = _logged_in_client(session_id)
+    if err:
+        return err
+    try:
+        return {"ok": True, **mail.list_receipts(client, page, search)}
+    except BizmekaError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"요청 실패: {e}"}
+
+
+@mcp.tool()
+def bizmeka_mail_cancel_send(session_id: str, mail_key: str) -> dict:
+    """아직 읽지 않은 보낸 메일의 발송을 취소한다.
+
+    주의: 수신자가 아직 읽지 않은 경우에만 취소 가능
+    (bizmeka_mail_receipts 의 available_cancel 로 확인).
+
+    Args:
+        session_id: 로그인된 세션 ID
+        mail_key: 취소할 메일의 mail_key (bizmeka_mail_receipts 결과)
+    """
+    client, err = _logged_in_client(session_id)
+    if err:
+        return err
+    try:
+        return {"ok": True, "result": mail.cancel_send(client, mail_key)}
+    except BizmekaError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"요청 실패: {e}"}
 
 
 def main() -> None:
