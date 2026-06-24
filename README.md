@@ -54,15 +54,31 @@ GET  ezportal /portal/main/main.do → 로그인 완료
 
 ```bash
 uv sync
-uv run kt-bizmeka-mcp     # stdio MCP 서버
+uv run kt-bizmeka-mcp     # 기본 stdio MCP 서버 (로컬 클라이언트용)
 ```
 
-### Docker
+### Transport
+
+`MCP_TRANSPORT` 환경변수로 전송 방식을 고른다.
+
+| 값 | 용도 |
+|---|---|
+| `stdio` (기본) | Claude Desktop / Hermes 등 로컬 MCP 클라이언트가 프로세스를 띄워 stdin/stdout으로 통신 |
+| `streamable-http` (또는 `http`) | **배포용.** `MCP_HOST`:`MCP_PORT`(기본 0.0.0.0:8000)에서 상주, 엔드포인트 `/mcp` |
+| `sse` | 레거시 SSE |
+
+> stdio 서버는 stdin이 닫히면 즉시 종료된다. 그래서 `docker run`으로 그냥 띄우면 컨테이너가 계속 재시작(exited 0)된다. **배포할 때는 반드시 HTTP transport를 쓸 것.**
+
+### Docker (배포)
+
+이미지는 기본값이 `MCP_TRANSPORT=streamable-http`, 포트 8000 노출이다.
 
 ```bash
 docker build -t kt-bizmeka-mcp .
-docker run -i --rm kt-bizmeka-mcp
+docker run --rm -p 8000:8000 kt-bizmeka-mcp   # http://localhost:8000/mcp
 ```
+
+Dokploy(Traefik) 배포 시에는 호스트 포트 바인딩 없이 `EXPOSE 8000`만 두고 도메인 라우팅으로 연결한다.
 
 ## MCP 클라이언트 설정 (Hermes / Claude Desktop)
 

@@ -13,6 +13,8 @@ Credentials are held only in memory for the lifetime of the in-flight session.
 
 from __future__ import annotations
 
+import os
+
 from mcp.server.fastmcp import FastMCP
 
 from .catalog import render_overview, render_tool
@@ -28,7 +30,12 @@ INSTRUCTIONS = (
     "임의 순서로 호출하지 말 것."
 )
 
-mcp = FastMCP("kt-bizmeka", instructions=INSTRUCTIONS)
+mcp = FastMCP(
+    "kt-bizmeka",
+    instructions=INSTRUCTIONS,
+    host=os.environ.get("MCP_HOST", "0.0.0.0"),
+    port=int(os.environ.get("MCP_PORT", "8000")),
+)
 
 
 @mcp.tool()
@@ -141,8 +148,26 @@ def bizmeka_session_status(session_id: str) -> dict:
 
 
 def main() -> None:
-    """Console-script entrypoint: run the MCP server over stdio."""
-    mcp.run()
+    """Console-script entrypoint.
+
+    Transport is chosen by the ``MCP_TRANSPORT`` env var:
+      * ``stdio`` (default) — for local MCP clients that spawn the process and
+        talk over stdin/stdout (Claude Desktop, Hermes stdio config).
+      * ``streamable-http`` / ``http`` — for deployment as a long-running
+        service (Docker/Dokploy). Listens on ``MCP_HOST``:``MCP_PORT`` and
+        serves the MCP endpoint at ``/mcp``.
+      * ``sse`` — legacy Server-Sent Events transport.
+
+    The stdio transport exits immediately when stdin closes (which is why a
+    bare ``docker run`` keeps restarting); use an HTTP transport to deploy.
+    """
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
+    if transport in ("http", "streamable-http", "streamable_http"):
+        mcp.run(transport="streamable-http")
+    elif transport == "sse":
+        mcp.run(transport="sse")
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

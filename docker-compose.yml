@@ -1,0 +1,13 @@
+services:
+  kt-bizmeka-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+    # Dokploy/Traefik routes by domain — expose only, no host port binding.
+    expose:
+      - "8000"
+    restart: unless-stopped
