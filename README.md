@@ -117,7 +117,7 @@ mcp_servers:
 - `.claude-plugin/plugin.json` — 플러그인 매니페스트
 - `.claude-plugin/marketplace.json` — 마켓플레이스 카탈로그 (`jeamxn-plugins`)
 - `.mcp.json` — MCP 서버 정의. 설치 경로(`${CLAUDE_PLUGIN_ROOT}`)에서 `uv run`으로 stdio 서버를 띄운다.
-- `skills/kt-bizmeka/SKILL.md` — 번들 스킬. 툴 호출 순서/워크플로우를 안내하며, 비즈메카 관련 요청 시 Claude가 자동으로 로드하거나 `/kt-bizmeka`로 직접 호출한다.
+- `SKILL.md` — 번들 스킬 (루트). 툴 호출 순서/워크플로우를 안내하며, 비즈메카 관련 요청 시 Claude가 자동으로 로드하거나 `/kt-bizmeka`로 직접 호출한다. 단독 스킬로 업로드할 수도 있고(SKILL.md가 최상위에 있어야 함), 플러그인에서는 `plugin.json`의 `skills`로 포함된다.
 
 > 플러그인 호스트에 `uv`가 설치돼 있어야 한다 (의존성은 `uv run`이 자동 동기화).
 
