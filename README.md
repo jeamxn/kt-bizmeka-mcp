@@ -97,6 +97,29 @@ mcp_servers:
     args: ["run", "--directory", "/path/to/kt-bizmeka-mcp", "kt-bizmeka-mcp"]
 ```
 
+## Claude Code 플러그인
+
+이 repo는 Claude Code 플러그인 + 마켓플레이스로도 배포된다. 설치하면 `bizmeka_*` 툴 12종이 Claude Code에 자동 등록된다.
+
+```
+/plugin marketplace add jeamxn/kt-bizmeka-mcp
+/plugin install kt-bizmeka@jeamxn-plugins
+```
+
+로컬 체크아웃에서 바로 테스트하려면:
+
+```
+/plugin marketplace add /path/to/kt-bizmeka-mcp
+/plugin install kt-bizmeka@jeamxn-plugins
+```
+
+플러그인 구성:
+- `.claude-plugin/plugin.json` — 플러그인 매니페스트
+- `.claude-plugin/marketplace.json` — 마켓플레이스 카탈로그 (`jeamxn-plugins`)
+- `.mcp.json` — MCP 서버 정의. 설치 경로(`${CLAUDE_PLUGIN_ROOT}`)에서 `uv run`으로 stdio 서버를 띄운다.
+
+> 플러그인 호스트에 `uv`가 설치돼 있어야 한다 (의존성은 `uv run`이 자동 동기화).
+
 ## 구조
 
 ```

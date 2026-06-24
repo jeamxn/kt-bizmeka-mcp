@@ -1,0 +1,14 @@
+{
+  "name": "jeamxn-plugins",
+  "owner": {
+    "name": "jeamxn",
+    "url": "https://github.com/jeamxn"
+  },
+  "plugins": [
+    {
+      "name": "kt-bizmeka",
+      "source": ".",
+      "description": "KT 비즈메카 EZ 자동화 MCP — 로그인(RSA+SMS 2FA+SAML), 웹메일 목록/상세/발송/답장/수신확인/발송취소"
+    }
+  ]
+}
