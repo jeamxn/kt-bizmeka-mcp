@@ -15,10 +15,36 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
+from .catalog import render_overview, render_tool
 from .client import BizmekaClient, BizmekaError
 from .session import store
 
-mcp = FastMCP("kt-bizmeka")
+INSTRUCTIONS = (
+    "KT 비즈메카 EZ 자동화 MCP. 로그인 자동화를 비롯해 포털 기능 툴이 점진적으로 "
+    "추가되는 확장형 서버다.\n\n"
+    "중요: 어떤 작업이든 시작하기 전에 반드시 `bizmeka_man` 툴을 먼저 호출해 "
+    "현재 사용 가능한 툴과 작업 흐름(워크플로우)을 확인하라. 특정 툴의 상세 사용법이 "
+    "필요하면 `bizmeka_man(tool='툴이름')` 으로 조회한다. 흐름을 모른 채 개별 툴을 "
+    "임의 순서로 호출하지 말 것."
+)
+
+mcp = FastMCP("kt-bizmeka", instructions=INSTRUCTIONS)
+
+
+@mcp.tool()
+def bizmeka_man(tool: str = "") -> dict:
+    """이 MCP의 사용법을 조회한다. 작업 전 항상 먼저 호출하라.
+
+    인자 없이 호출하면 전체 작업 흐름(워크플로우)과 사용 가능한 툴 목록을
+    반환한다. tool 인자에 특정 툴 이름을 넣으면 그 툴의 상세 사용법(인자, 반환값,
+    주의사항)을 알려준다.
+
+    Args:
+        tool: (선택) 상세 설명을 볼 툴 이름. 비우면 전체 개요를 반환한다.
+    """
+    if tool:
+        return render_tool(tool)
+    return render_overview()
 
 
 @mcp.tool()
