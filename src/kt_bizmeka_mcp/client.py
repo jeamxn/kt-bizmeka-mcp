@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
+from html import unescape
 from typing import Optional
 
 import httpx
@@ -188,11 +189,28 @@ class BizmekaClient:
         except ValueError:
             return False
 
-    # -- step 6: finalize 2nd factor -> sets isLogin=Y, COMPANY_* cookies --
+    # -- step 6: finalize 2nd factor -> SAML auto-post -> portal -----------
     def verify_otp(self, cert_key: str, remember_browser: bool = False) -> str:
-        """Submit the SMS code. Returns the redirect Location on success."""
+        """Submit the SMS code, post the resulting SAML assertion to the portal,
+        and land on the portal main page. Returns the final portal URL.
+
+        Real flow (observed):
+          1. GET  /confirmCertKey.do   registers the entered code (res=0)
+          2. POST /loginVerify.do      returns 200 with a SAML auto-post form
+                                       and sets isLogin=Y on success
+          3. POST ezportal assertionConsumer.do with the SAMLResponse
+          4. GET  ezportal portal/main/main.do
+        """
         if not self._ctx:
-            raise BizmekaError("login context not initialized; call submit_credentials first")
+            raise BizmekaError(
+                "login context not initialized; call submit_credentials first"
+            )
+
+        # 1) confirm the code first (the browser does this before loginVerify)
+        if not self.confirm_cert_key(cert_key):
+            raise BizmekaError("2차 인증 실패: 인증번호가 올바르지 않습니다.")
+
+        # 2) loginVerify -> SAML auto-post HTML (status 200) + isLogin cookie
         data = {
             "bannerUrl": "",
             "certKey": cert_key,
@@ -211,67 +229,58 @@ class BizmekaClient:
             },
         )
         loc = r.headers.get("Location", "")
-        if r.status_code != 302 or "loginForm" in loc:
+        if "secondStepVerif" in loc or "loginForm" in loc:
+            raise BizmekaError("2차 인증 실패: 인증번호가 틀렸거나 만료되었습니다.")
+        if self._client.cookies.get("isLogin") != "Y":
             raise BizmekaError(
-                "2차 인증 실패: 인증번호가 틀렸거나 만료되었습니다."
+                "2차 인증 실패: 로그인 쿠키가 설정되지 않았습니다. 인증번호를 확인하세요."
             )
-        return loc
 
-    # -- step 7: follow SSO redirect, post the SAML assertion to the SP ----
-    def complete_sso(self, start_url: str) -> str:
-        """Follow the post-2FA redirect chain, auto-submit any SAMLResponse
-        form to ezportal, and land on the portal main page. Returns the final
-        portal URL reached."""
-        url = start_url
-        if url.startswith("/"):
-            url = SSO_BASE + url
+        # 3) post the SAML assertion carried in the response body to the SP
+        saml = self._extract_saml_form(r.text)
+        if saml is None:
+            raise BizmekaError("2차 인증은 통과했으나 SAML 응답을 찾지 못했습니다.")
+        action, fields = saml
+        self._client.post(
+            action,
+            data=fields,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": SSO_BASE,
+                "Referer": f"{SSO_BASE}/",
+            },
+        )
 
-        # Walk redirects manually until we hit an HTML page (the SAML auto-post
-        # form) or run out of hops.
-        for _ in range(10):
-            r = self._client.get(url, headers={"Referer": f"{SSO_BASE}/"})
-            if r.status_code in (301, 302, 303, 307, 308):
-                nxt = r.headers.get("Location", "")
-                url = nxt if nxt.startswith("http") else SSO_BASE + nxt
-                continue
-            # Non-redirect: inspect body for a SAML auto-post form
-            saml = self._extract_saml_form(r.text)
-            if saml:
-                action, fields = saml
-                self._client.post(
-                    action,
-                    data=fields,
-                    headers={
-                        "Content-Type": "application/x-www-form-urlencoded",
-                        "Origin": SSO_BASE,
-                        "Referer": f"{SSO_BASE}/",
-                    },
-                )
-                break
-            break
-
-        # Confirm portal session by loading main page
-        r = self._client.get(
+        # 4) confirm the portal session
+        rp = self._client.get(
             f"{PORTAL_BASE}/portal/main/main.do",
             headers={"Referer": f"{SSO_BASE}/"},
             follow_redirects=True,
         )
-        if r.status_code != 200:
-            raise BizmekaError(f"포털 진입 실패 (status={r.status_code})")
-        return str(r.url)
+        if rp.status_code != 200:
+            raise BizmekaError(f"포털 진입 실패 (status={rp.status_code})")
+        return str(rp.url)
 
     @staticmethod
     def _extract_saml_form(html: str):
-        """Return (action_url, {field: value}) for a SAML auto-post form, or None."""
+        """Return (action_url, {field: value}) for a SAML auto-post form, or None.
+
+        The action URL arrives HTML-entity-encoded (e.g. ``https&#x3a;&#x2f;...``)
+        so we unescape it before use.
+        """
         if "SAMLResponse" not in html:
             return None
         action_m = re.search(r'<form[^>]+action="([^"]+)"', html, re.I)
-        action = action_m.group(1) if action_m else f"{PORTAL_BASE}/sso/assertionConsumer.do"
+        action = (
+            unescape(action_m.group(1))
+            if action_m
+            else f"{PORTAL_BASE}/sso/assertionConsumer.do"
+        )
         fields = {}
         for m in re.finditer(
             r'<input[^>]+name="([^"]+)"[^>]*value="([^"]*)"', html, re.I
         ):
-            fields[m.group(1)] = m.group(2)
+            fields[unescape(m.group(1))] = unescape(m.group(2))
         if "SAMLResponse" not in fields:
             return None
         return action, fields

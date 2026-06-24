@@ -103,8 +103,9 @@ def bizmeka_verify_otp(
 
     client = sess.client
     try:
-        redirect = client.verify_otp(cert_key.strip(), remember_browser=remember_browser)
-        portal_url = client.complete_sso(redirect)
+        portal_url = client.verify_otp(
+            cert_key.strip(), remember_browser=remember_browser
+        )
     except BizmekaError as e:
         return {"ok": False, "error": str(e)}
     except Exception as e:
