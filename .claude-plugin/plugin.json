@@ -1,13 +1,12 @@
 {
   "name": "kt-bizmeka",
   "version": "0.1.0",
-  "description": "KT 비즈메카 EZ 자동화 — RSA 로그인/SMS 2차인증/SAML SSO + 웹메일(목록/상세/발송/답장/수신확인/발송취소) MCP 서버",
+  "description": "KT 비즈메카 EZ 자동화 — RSA 로그인/SMS 2차인증/SAML SSO + 웹메일(목록/상세/발송/답장/수신확인/발송취소)",
   "author": {
     "name": "jeamxn"
   },
   "homepage": "https://github.com/jeamxn/kt-bizmeka-mcp",
   "repository": "https://github.com/jeamxn/kt-bizmeka-mcp",
   "license": "MIT",
-  "keywords": ["bizmeka", "kt", "webmail", "saml", "korea", "mcp"],
-  "skills": ["./SKILL.md"]
+  "keywords": ["bizmeka", "kt", "webmail", "saml", "korea"]
 }

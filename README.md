@@ -97,27 +97,37 @@ mcp_servers:
     args: ["run", "--directory", "/path/to/kt-bizmeka-mcp", "kt-bizmeka-mcp"]
 ```
 
-## Claude Code 플러그인
+## Claude Code 플러그인 (스킬 번들)
 
-이 repo는 Claude Code 플러그인 + 마켓플레이스로도 배포된다. 설치하면 `bizmeka_*` 툴 12종이 Claude Code에 자동 등록된다.
+이 repo는 Claude Code 플러그인 + 마켓플레이스로도 배포된다. 설치하면 `skills/` 아래의 스킬들이 Claude Code에 등록되어, 비즈메카 관련 요청 시 자동 로드되거나 `/kt-bizmeka`로 직접 호출된다. 스킬은 MCP 툴이 아니라 패키지 함수(`kt_bizmeka_mcp.client` / `kt_bizmeka_mcp.mail`)를 `uv run python`으로 직접 호출하는 절차를 안내한다.
 
 ```
 /plugin marketplace add jeamxn/kt-bizmeka-mcp
-/plugin install kt-bizmeka@jeamxn-plugins
+/plugin install kt-bizmeka@kt-bizmeka
 ```
 
 로컬 체크아웃에서 바로 테스트하려면:
 
 ```
 /plugin marketplace add /path/to/kt-bizmeka-mcp
-/plugin install kt-bizmeka@jeamxn-plugins
+/plugin install kt-bizmeka@kt-bizmeka
 ```
+
+### 번들 스킬
+
+| 스킬 | 역할 |
+|---|---|
+| `kt-bizmeka` | 진입점/전체 안내(man). 작업 전 먼저 읽어 흐름과 세부 스킬을 파악 |
+| `kt-bizmeka-login` | 로그인 (RSA 1차 + SMS 2차인증 + SSO) |
+| `kt-bizmeka-mail-read` | 메일함 조회 / 본문 읽기 / 첨부 / 읽음표시 |
+| `kt-bizmeka-mail-send` | 메일 발송 / 답장 / 수신자 검증 |
+| `kt-bizmeka-mail-receipt` | 수신확인 / 발송취소 |
 
 플러그인 구성:
 - `.claude-plugin/plugin.json` — 플러그인 매니페스트
-- `.claude-plugin/marketplace.json` — 마켓플레이스 카탈로그 (`jeamxn-plugins`)
-- `.mcp.json` — MCP 서버 정의. 설치 경로(`${CLAUDE_PLUGIN_ROOT}`)에서 `uv run`으로 stdio 서버를 띄운다.
-- `SKILL.md` — 번들 스킬 (루트). 툴 호출 순서/워크플로우를 안내하며, 비즈메카 관련 요청 시 Claude가 자동으로 로드하거나 `/kt-bizmeka`로 직접 호출한다. 단독 스킬로 업로드할 수도 있고(SKILL.md가 최상위에 있어야 함), 플러그인에서는 `plugin.json`의 `skills`로 포함된다.
+- `.claude-plugin/marketplace.json` — 마켓플레이스 카탈로그 (`kt-bizmeka`)
+- `skills/<name>/SKILL.md` — 번들 스킬 (위 표). Claude Code가 `skills/` 폴더를 자동 발견한다.
+- `.mcp.json` — (선택) MCP 서버 정의. MCP 서버로 쓰고 싶을 때만 사용하며, 스킬과는 독립적이다.
 
 > 플러그인 호스트에 `uv`가 설치돼 있어야 한다 (의존성은 `uv run`이 자동 동기화).
 
