@@ -149,8 +149,149 @@ class BizmekaClient:
             f"예상치 못한 응답 (status={r.status_code}, location={location!r})"
         )
 
+    # -- step 3: load 2nd-step page (also primes the referer/cookies) ------
+    def load_second_step(self) -> None:
+        r = self._client.get(
+            f"{SSO_BASE}/rule/secondStepVerifView.do",
+            headers={"Referer": f"{SSO_BASE}/loginForm.do"},
+        )
+        r.raise_for_status()
+        if "loginVerify" not in r.text:
+            raise BizmekaError("2차 인증 페이지를 불러오지 못했습니다.")
+
+    # -- step 4: send the SMS one-time code to the registered phone --------
+    def send_sms(self) -> None:
+        """Trigger an SMS containing the cert key. Raises on server error."""
+        r = self._client.get(
+            f"{SSO_BASE}/sendCertKeyToMobile.do",
+            params={"_": int(time.time() * 1000)},
+            headers=self._ajax_headers(),
+        )
+        r.raise_for_status()
+        data = r.json()
+        # res: 0 = OK, -1 = session expired, other = error (msg present)
+        if data.get("res") != 0:
+            raise BizmekaError(
+                f"인증번호 발송 실패: {data.get('msg', '알 수 없는 오류')}"
+            )
+
+    # -- step 5: pre-check the entered code (AJAX, optional) ---------------
+    def confirm_cert_key(self, cert_key: str) -> bool:
+        r = self._client.get(
+            f"{SSO_BASE}/confirmCertKey.do",
+            params={"certKey": cert_key, "_": int(time.time() * 1000)},
+            headers=self._ajax_headers(),
+        )
+        r.raise_for_status()
+        try:
+            return r.json().get("res") == 0
+        except ValueError:
+            return False
+
+    # -- step 6: finalize 2nd factor -> sets isLogin=Y, COMPANY_* cookies --
+    def verify_otp(self, cert_key: str, remember_browser: bool = False) -> str:
+        """Submit the SMS code. Returns the redirect Location on success."""
+        if not self._ctx:
+            raise BizmekaError("login context not initialized; call submit_credentials first")
+        data = {
+            "bannerUrl": "",
+            "certKey": cert_key,
+            "OWASP_CSRFTOKEN": self._ctx.csrf_token,
+        }
+        if remember_browser:
+            data["browserCertify"] = "Y"
+        r = self._client.post(
+            f"{SSO_BASE}/loginVerify.do",
+            params={"OWASP_CSRFTOKEN": self._ctx.csrf_token},
+            data=data,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": SSO_BASE,
+                "Referer": f"{SSO_BASE}/rule/secondStepVerifView.do",
+            },
+        )
+        loc = r.headers.get("Location", "")
+        if r.status_code != 302 or "loginForm" in loc:
+            raise BizmekaError(
+                "2차 인증 실패: 인증번호가 틀렸거나 만료되었습니다."
+            )
+        return loc
+
+    # -- step 7: follow SSO redirect, post the SAML assertion to the SP ----
+    def complete_sso(self, start_url: str) -> str:
+        """Follow the post-2FA redirect chain, auto-submit any SAMLResponse
+        form to ezportal, and land on the portal main page. Returns the final
+        portal URL reached."""
+        url = start_url
+        if url.startswith("/"):
+            url = SSO_BASE + url
+
+        # Walk redirects manually until we hit an HTML page (the SAML auto-post
+        # form) or run out of hops.
+        for _ in range(10):
+            r = self._client.get(url, headers={"Referer": f"{SSO_BASE}/"})
+            if r.status_code in (301, 302, 303, 307, 308):
+                nxt = r.headers.get("Location", "")
+                url = nxt if nxt.startswith("http") else SSO_BASE + nxt
+                continue
+            # Non-redirect: inspect body for a SAML auto-post form
+            saml = self._extract_saml_form(r.text)
+            if saml:
+                action, fields = saml
+                self._client.post(
+                    action,
+                    data=fields,
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Origin": SSO_BASE,
+                        "Referer": f"{SSO_BASE}/",
+                    },
+                )
+                break
+            break
+
+        # Confirm portal session by loading main page
+        r = self._client.get(
+            f"{PORTAL_BASE}/portal/main/main.do",
+            headers={"Referer": f"{SSO_BASE}/"},
+            follow_redirects=True,
+        )
+        if r.status_code != 200:
+            raise BizmekaError(f"포털 진입 실패 (status={r.status_code})")
+        return str(r.url)
+
+    @staticmethod
+    def _extract_saml_form(html: str):
+        """Return (action_url, {field: value}) for a SAML auto-post form, or None."""
+        if "SAMLResponse" not in html:
+            return None
+        action_m = re.search(r'<form[^>]+action="([^"]+)"', html, re.I)
+        action = action_m.group(1) if action_m else f"{PORTAL_BASE}/sso/assertionConsumer.do"
+        fields = {}
+        for m in re.finditer(
+            r'<input[^>]+name="([^"]+)"[^>]*value="([^"]*)"', html, re.I
+        ):
+            fields[m.group(1)] = m.group(2)
+        if "SAMLResponse" not in fields:
+            return None
+        return action, fields
+
+    def _ajax_headers(self) -> dict:
+        if not self._ctx:
+            raise BizmekaError("login context not initialized")
+        return {
+            "OWASP_CSRFTOKEN": self._ctx.csrf_token,
+            "Referer": f"{SSO_BASE}/rule/secondStepVerifView.do",
+            "X-Requested-With": "XMLHttpRequest, OWASP CSRFGuard Project",
+            "Accept": "*/*",
+        }
+
     @property
     def csrf_token(self) -> str:
         if not self._ctx:
             raise BizmekaError("login context not initialized")
         return self._ctx.csrf_token
+
+    @property
+    def is_logged_in(self) -> bool:
+        return self._client.cookies.get("isLogin") == "Y"
