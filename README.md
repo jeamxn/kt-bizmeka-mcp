@@ -111,7 +111,7 @@ mcp_servers:
 
 ## Claude Code 플러그인
 
-이 repo는 Claude Code 플러그인 + 마켓플레이스로도 배포된다. 설치하면 `.mcp.json`에 정의된 원격 MCP 서버(`https://bizmeka-mcp.jeamxn.dev/mcp`)가 등록되어 `bizmeka_*` 툴을 바로 쓸 수 있다.
+이 repo는 Claude Code 플러그인 + 마켓플레이스로도 배포된다. 설치하면 `plugin.json`의 `mcpServers`에 인라인 정의된 원격 MCP 서버(`https://bizmeka-mcp.jeamxn.dev/mcp`)가 자동 등록되어 `bizmeka_*` 툴을 바로 쓸 수 있다. 설치하는 머신에 소스 체크아웃이나 `uv` 가 없어도 된다 (원격 streamable-http).
 
 ```
 /plugin marketplace add jeamxn/kt-bizmeka-mcp
@@ -126,9 +126,8 @@ mcp_servers:
 ```
 
 플러그인 구성:
-- `.claude-plugin/plugin.json` — 플러그인 매니페스트
+- `.claude-plugin/plugin.json` — 플러그인 매니페스트 + `mcpServers` 인라인 (원격 http, `https://bizmeka-mcp.jeamxn.dev/mcp`)
 - `.claude-plugin/marketplace.json` — 마켓플레이스 카탈로그 (`kt-bizmeka`)
-- `.mcp.json` — 원격 MCP 서버 정의 (streamable-http, `https://bizmeka-mcp.jeamxn.dev/mcp`)
 
 > 어떤 작업이든 시작 전에 `bizmeka_man` 툴을 먼저 호출해 현재 사용 가능한 툴과 워크플로우를 확인한다.
 

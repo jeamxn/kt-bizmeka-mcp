@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "kt-bizmeka": {
-      "type": "http",
-      "url": "https://bizmeka-mcp.jeamxn.dev/mcp"
-    }
-  }
-}

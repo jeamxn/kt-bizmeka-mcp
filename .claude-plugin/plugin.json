@@ -8,5 +8,11 @@
   "homepage": "https://github.com/jeamxn/kt-bizmeka-mcp",
   "repository": "https://github.com/jeamxn/kt-bizmeka-mcp",
   "license": "MIT",
-  "keywords": ["bizmeka", "kt", "webmail", "saml", "korea"]
+  "keywords": ["bizmeka", "kt", "webmail", "saml", "korea"],
+  "mcpServers": {
+    "kt-bizmeka": {
+      "type": "http",
+      "url": "https://bizmeka-mcp.jeamxn.dev/mcp"
+    }
+  }
 }
