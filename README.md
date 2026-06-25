@@ -126,7 +126,9 @@ mcp_servers:
 ```
 
 플러그인 구성:
-- `.claude-plugin/plugin.json` — 플러그인 매니페스트 + `mcpServers` 인라인 (원격 http, `https://bizmeka-mcp.jeamxn.dev/mcp`)
+- `.claude-plugin/plugin.json` — 플러그인 매니페스트 + `mcpServers` 인라인:
+  - `kt-bizmeka` — 원격 http (`https://bizmeka-mcp.jeamxn.dev/mcp`), 기본 사용 권장
+  - `kt-bizmeka-local` — 로컬 stdio (`uv run --directory ${CLAUDE_PLUGIN_ROOT}`). 소스 체크아웃 + `uv` 필요
 - `.claude-plugin/marketplace.json` — 마켓플레이스 카탈로그 (`kt-bizmeka`)
 
 > 어떤 작업이든 시작 전에 `bizmeka_man` 툴을 먼저 호출해 현재 사용 가능한 툴과 워크플로우를 확인한다.
