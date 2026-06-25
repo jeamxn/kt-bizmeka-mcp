@@ -362,11 +362,40 @@ def main() -> None:
     """
     transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
     if transport in ("http", "streamable-http", "streamable_http"):
-        mcp.run(transport="streamable-http")
+        _run_http()
     elif transport == "sse":
         mcp.run(transport="sse")
     else:
         mcp.run(transport="stdio")
+
+
+def _run_http() -> None:
+    """Serve streamable-http behind a TLS-terminating reverse proxy.
+
+    Running ``mcp.run(transport="streamable-http")`` starts uvicorn WITHOUT
+    trusting proxy headers. Behind Dokploy/Traefik (which terminate TLS and
+    forward plain HTTP with ``X-Forwarded-Proto: https``), the app then thinks
+    it is serving plain HTTP and emits redirects (e.g. the trailing-slash
+    ``/mcp/`` -> ``/mcp`` 307) with an ``http://`` Location. MCP clients refuse
+    that https->http downgrade and report "not connected".
+
+    Fix: run uvicorn with ``proxy_headers=True`` + ``forwarded_allow_ips="*"``
+    so the forwarded scheme/host are honored; redirects then stay on https and
+    both ``/mcp`` and ``/mcp/`` work for any client.
+    """
+    import uvicorn
+
+    app = mcp.streamable_http_app()
+
+    host = os.environ.get("MCP_HOST", "0.0.0.0")
+    port = int(os.environ.get("MCP_PORT", "8000"))
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
 
 
 if __name__ == "__main__":
