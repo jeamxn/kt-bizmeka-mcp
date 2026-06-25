@@ -1,16 +1,8 @@
 {
   "mcpServers": {
     "kt-bizmeka": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--directory",
-        "${CLAUDE_PLUGIN_ROOT}",
-        "kt-bizmeka-mcp"
-      ],
-      "env": {
-        "MCP_TRANSPORT": "stdio"
-      }
+      "type": "http",
+      "url": "https://bizmeka-mcp.jeamxn.dev/mcp"
     }
   }
 }
