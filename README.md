@@ -130,22 +130,12 @@ Dokploy(Traefik) 배포 시에는 호스트 포트 바인딩 없이 `EXPOSE 8000
 
 ## MCP 클라이언트 설정 (Hermes / Claude Desktop)
 
-배포된 원격 서버에 streamable-http로 바로 붙인다 (로컬에 소스/바이너리 불필요).
+로컬 바이너리를 stdio로 직접 붙인다:
 
 ```yaml
 mcp_servers:
   kt-bizmeka:
-    url: https://bizmeka-mcp.jeamxn.dev/mcp
-    timeout: 180
-    connect_timeout: 30
-```
-
-로컬 바이너리를 직접 stdio로 붙이려면:
-
-```yaml
-mcp_servers:
-  kt-bizmeka:
-    command: "/path/to/dist/kt-bizmeka-mcp-darwin-arm64"
+    command: "/path/to/kt-bizmeka-mcp"   # 빌드한 바이너리 (또는 plugin zip 안의 것)
     env:
       MCP_TRANSPORT: stdio
 ```
@@ -184,20 +174,21 @@ kt-bizmeka-plugin-windows-x64.zip
 
 > macOS Finder / `unzip` CLI 는 바이너리의 실행권한(0755)을 보존한다. 혹시 실행 권한이 없다면 `chmod +x kt-bizmeka-mcp` 한 번이면 된다.
 
-### B. 레포 직접 추가 (소스/원격 http)
+### B. 레포 직접 추가 (소스)
 
 ```
 /plugin marketplace add jeamxn/kt-bizmeka-mcp
 /plugin install kt-bizmeka@kt-bizmeka
 ```
 
-레포의 `.claude-plugin/plugin.json` 은:
-- `kt-bizmeka` — 원격 http (`https://bizmeka-mcp.jeamxn.dev/mcp`), 기본 사용 권장. 설치 머신에 아무것도 필요 없음
-- `kt-bizmeka-local` — `node scripts/launcher.cjs` 로 로컬 stdio 실행. 레포에는 빌드된 바이너리가 없으므로, 런처가 OS/아키텍처를 감지해:
-  1. 소스 체크아웃이면 `dist/`의 빌드 결과를 쓰고,
-  2. `dist/`가 없으면 **최신 GitHub Release(`releases/latest`)에서 자기 OS의 plugin zip을 받아 그 안의 바이너리를 추출**해 `~/.cache/kt-bizmeka-mcp/<version>/`에 저장한 뒤 실행한다.
+레포의 `.claude-plugin/plugin.json` 의 `kt-bizmeka-local` 은 `${CLAUDE_PLUGIN_ROOT}/kt-bizmeka-mcp` 바이너리를 **직접** stdio로 실행한다 (node 등 런타임 불필요). 단, 레포에는 빌드된 바이너리가 없으므로 먼저 한 번 빌드해 레포 루트에 떨궈야 한다:
 
-  > Claude Code는 Node 위에서 돌기 때문에 `node`는 항상 사용 가능하다. 런처는 디스패치만 하고 실제 서버 로직은 전부 Bun 바이너리 안에 있다. OS별 zip(A안)을 쓰면 이 런처 단계도 생략된다.
+```bash
+bun install
+bun run build:current   # 레포 루트에 kt-bizmeka-mcp 생성
+```
+
+> 빌드가 귀찮으면 OS별 plugin zip(A안)을 받으면 바이너리가 이미 들어 있어 빌드가 필요 없다.
 
 > 어떤 작업이든 시작 전에 `bizmeka_man` 툴을 먼저 호출해 현재 사용 가능한 툴과 워크플로우를 확인한다.
 
@@ -217,10 +208,9 @@ scripts/
   build.ts        크로스 컴파일 (5개 플랫폼)
   package.py      OS별 플러그인 zip 패키징 (바이너리 + .claude-plugin)
   release.sh      빌드 + 패키징 + GitHub Release 업로드 (수동 릴리스용)
-  launcher.cjs    플러그인용 플랫폼 디스패처 (Node, 레포 직접 추가 케이스)
   mcp_smoke.sh    stdio MCP 핸드셰이크 스모크 테스트
 .github/workflows/
-  release.yml     태그 push 시 빌드→패키징→릴리스 업로드 자동화
+  release.yml     main push 시 빌드→패키징→릴리스 업로드 자동화 (KST 캘린더 태그)
 ```
 
 ## 면책

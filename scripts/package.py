@@ -58,10 +58,6 @@ def plugin_json(version: str, plat: str, cmd: str, build: str) -> str:
         "license": "MIT",
         "keywords": ["bizmeka", "kt", "webmail", "saml", "korea"],
         "mcpServers": {
-            "kt-bizmeka": {
-                "type": "http",
-                "url": "https://bizmeka-mcp.jeamxn.dev/mcp",
-            },
             "kt-bizmeka-local": {
                 "command": cmd,
                 "env": {"MCP_TRANSPORT": "stdio"},
