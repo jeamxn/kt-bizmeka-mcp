@@ -26,6 +26,7 @@ cookies.txt
 # test artifacts
 .pytest_cache/
 *.html
+!docs/*.html
 *.log
 
 # OS

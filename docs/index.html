@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KT bizmeka MCP — 다운로드</title>
+<meta name="description" content="KT 비즈메카 EZ 자동화 MCP 플러그인 — 최신 릴리스 다운로드" />
+<style>
+  :root {
+    --bg: #0d0d0f;
+    --fg: #e8e8ea;
+    --muted: #8a8a90;
+    --line: #26262b;
+    --card: #161619;
+    --accent: #f5f5f7;
+    --accent-bg: #f5f5f7;
+    --accent-fg: #0d0d0f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Helvetica Neue", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---- header ---- */
+  header { padding: 80px 0 48px; border-bottom: 1px solid var(--line); }
+  .eyebrow {
+    font-size: 13px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 20px;
+  }
+  h1 {
+    font-size: clamp(40px, 8vw, 76px); font-weight: 800; line-height: 1.02;
+    letter-spacing: -0.03em;
+  }
+  h1 .dim { color: var(--muted); }
+  .lede {
+    margin-top: 24px; font-size: 18px; color: var(--muted); max-width: 52ch;
+  }
+  .meta {
+    margin-top: 32px; display: flex; gap: 28px; flex-wrap: wrap;
+    font-size: 14px; align-items: baseline;
+  }
+  .meta .k { color: var(--muted); margin-right: 8px; }
+  .meta .v { color: var(--fg); font-variant-numeric: tabular-nums; }
+  a { color: inherit; }
+
+  /* ---- recommended ---- */
+  section { padding: 56px 0; border-bottom: 1px solid var(--line); }
+  .sec-label {
+    font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 28px;
+  }
+  .primary {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 24px; flex-wrap: wrap;
+  }
+  .primary .desc { font-size: 15px; color: var(--muted); }
+  .primary .desc strong { color: var(--fg); font-weight: 600; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 10px;
+    background: var(--accent-bg); color: var(--accent-fg);
+    border: 1px solid var(--accent-bg); border-radius: 10px;
+    padding: 14px 24px; font-size: 16px; font-weight: 600;
+    text-decoration: none; white-space: nowrap; transition: opacity .15s ease;
+  }
+  .btn:hover { opacity: .86; }
+  .btn .sz { font-weight: 400; opacity: .6; font-variant-numeric: tabular-nums; }
+
+  /* ---- all platforms ---- */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+    background: var(--line); border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden; }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+  .row {
+    background: var(--card); padding: 20px 22px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  }
+  .row .name { font-size: 15px; font-weight: 600; }
+  .row .sub { font-size: 13px; color: var(--muted); margin-top: 2px;
+    font-variant-numeric: tabular-nums; }
+  .row a.dl {
+    font-size: 14px; color: var(--fg); text-decoration: none;
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 16px;
+    white-space: nowrap; transition: border-color .15s ease;
+  }
+  .row a.dl:hover { border-color: var(--muted); }
+
+  /* ---- install ---- */
+  ol.steps { list-style: none; counter-reset: s; }
+  ol.steps li {
+    counter-increment: s; padding: 16px 0 16px 48px; position: relative;
+    border-bottom: 1px solid var(--line); font-size: 15px;
+  }
+  ol.steps li:last-child { border-bottom: none; }
+  ol.steps li::before {
+    content: counter(s); position: absolute; left: 0; top: 14px;
+    width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 50%;
+    display: grid; place-items: center; font-size: 13px; color: var(--muted);
+  }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  code { background: #1c1c20; border: 1px solid var(--line); border-radius: 5px;
+    padding: 2px 7px; font-size: 13px; }
+  pre {
+    background: #1c1c20; border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; margin-top: 12px; overflow-x: auto; font-size: 13px;
+    line-height: 1.7; color: #d4d4d8;
+  }
+  .note { font-size: 13px; color: var(--muted); margin-top: 10px; }
+
+  /* ---- footer ---- */
+  footer { padding: 48px 0 80px; color: var(--muted); font-size: 14px;
+    display: flex; gap: 24px; flex-wrap: wrap; }
+  footer a { text-decoration: none; border-bottom: 1px solid var(--line);
+    padding-bottom: 1px; }
+  footer a:hover { border-color: var(--muted); }
+
+  .state { font-size: 15px; color: var(--muted); }
+  .err { color: #e08a8a; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Claude Code Plugin</div>
+    <h1>KT bizmeka<br /><span class="dim">MCP 자동화</span></h1>
+    <p class="lede">
+      비즈메카 EZ 로그인(RSA · SMS 2차인증 · SAML SSO)부터 웹메일까지 자동화하는
+      MCP 서버. 의존성 없는 단일 실행 바이너리로 배포됩니다.
+    </p>
+    <div class="meta">
+      <div><span class="k">최신 버전</span><span class="v" id="ver">—</span></div>
+      <div><span class="k">배포일</span><span class="v" id="date">—</span></div>
+      <div><span class="k">제공 도구</span><span class="v">12개</span></div>
+    </div>
+  </header>
+
+  <section>
+    <div class="sec-label">권장 다운로드</div>
+    <div class="primary" id="primary">
+      <div class="desc state">최신 릴리스를 불러오는 중…</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">모든 플랫폼</div>
+    <div class="grid" id="grid"></div>
+    <p class="note" id="reltag"></p>
+  </section>
+
+  <section>
+    <div class="sec-label">설치 방법</div>
+    <ol class="steps">
+      <li>위에서 본인 OS에 맞는 <strong>.zip</strong>을 받아 압축을 풉니다.</li>
+      <li>
+        macOS / Linux는 실행 권한이 필요할 수 있습니다.
+        <pre>chmod +x kt-bizmeka-mcp</pre>
+      </li>
+      <li>
+        Claude Code에 로컬 플러그인으로 추가합니다. 압축 안의
+        <code>.claude-plugin/plugin.json</code>이 바로 그 바이너리를 실행하도록
+        구성돼 있습니다.
+      </li>
+      <li>
+        Claude에서 <code>bizmeka_man</code>을 먼저 호출해 사용 가능한 도구와
+        로그인 흐름을 확인한 뒤 시작하세요.
+      </li>
+    </ol>
+    <p class="note">
+      macOS에서 “확인되지 않은 개발자” 경고가 뜨면
+      <code>xattr -d com.apple.quarantine kt-bizmeka-mcp</code> 로 해제할 수 있습니다.
+    </p>
+  </section>
+
+  <footer>
+    <a href="https://github.com/jeamxn/kt-bizmeka-mcp">GitHub 저장소</a>
+    <a href="https://github.com/jeamxn/kt-bizmeka-mcp/releases">전체 릴리스</a>
+    <a id="notes-link" href="https://github.com/jeamxn/kt-bizmeka-mcp/releases/latest">릴리스 노트</a>
+  </footer>
+
+</div>
+
+<script>
+  const REPO = "jeamxn/kt-bizmeka-mcp";
+
+  // asset 파일명 -> 표시 정보. order = 표시 순서.
+  const PLATFORMS = [
+    { key: "darwin-arm64",  label: "macOS",   sub: "Apple Silicon (M1+)" },
+    { key: "darwin-x64",    label: "macOS",   sub: "Intel" },
+    { key: "windows-x64",   label: "Windows", sub: "x64" },
+    { key: "linux-x64",     label: "Linux",   sub: "x64" },
+    { key: "linux-arm64",   label: "Linux",   sub: "ARM64" },
+  ];
+  const ASSET = (k) => `kt-bizmeka-plugin-${k}.zip`;
+
+  function fmtSize(bytes) {
+    if (!bytes && bytes !== 0) return "";
+    const mb = bytes / (1024 * 1024);
+    return mb >= 1 ? mb.toFixed(1) + " MB" : Math.round(bytes / 1024) + " KB";
+  }
+  function fmtDate(iso) {
+    try {
+      return new Date(iso).toLocaleDateString("ko-KR", {
+        year: "numeric", month: "long", day: "numeric",
+        timeZone: "Asia/Seoul",
+      });
+    } catch { return iso; }
+  }
+
+  // 브라우저로 OS/arch 추정해 권장 항목 선택.
+  function detectKey() {
+    const ua = navigator.userAgent;
+    const uad = navigator.userAgentData;
+    const plat = (uad && uad.platform ? uad.platform : navigator.platform || "").toLowerCase();
+    const isMac = /mac/.test(plat) || /Mac OS X/.test(ua);
+    const isWin = /win/.test(plat) || /Windows/.test(ua);
+    const isLinux = /linux/.test(plat) && !/android/i.test(ua);
+    // arm 추정 (불완전 — Apple Silicon은 Intel로 보고되는 경우 많음)
+    const arm = /arm|aarch64/i.test(ua) || (uad && uad.architecture === "arm");
+    if (isMac) return "darwin-arm64"; // Mac 기본 Apple Silicon 권장 (목록에서 Intel 선택 가능)
+    if (isWin) return "windows-x64";
+    if (isLinux) return arm ? "linux-arm64" : "linux-x64";
+    return "darwin-arm64";
+  }
+
+  function assetMap(assets) {
+    const m = {};
+    for (const a of assets) m[a.name] = a;
+    return m;
+  }
+
+  async function load() {
+    const url = `https://api.github.com/repos/${REPO}/releases/latest`;
+    let rel;
+    try {
+      const res = await fetch(url, { headers: { Accept: "application/vnd.github+json" } });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      rel = await res.json();
+    } catch (e) {
+      document.getElementById("primary").innerHTML =
+        '<div class="desc err">릴리스 정보를 불러오지 못했습니다. ' +
+        '<a href="https://github.com/' + REPO + '/releases/latest">릴리스 페이지</a>에서 직접 받아주세요.</div>';
+      return;
+    }
+
+    document.getElementById("ver").textContent = rel.tag_name || "—";
+    document.getElementById("date").textContent = fmtDate(rel.published_at);
+    document.getElementById("reltag").textContent =
+      "릴리스 " + (rel.tag_name || "") + " · 위 파일들은 GitHub Release에서 직접 제공됩니다.";
+    if (rel.html_url) document.getElementById("notes-link").href = rel.html_url;
+
+    const amap = assetMap(rel.assets || []);
+    const recKey = detectKey();
+    const recPlat = PLATFORMS.find((p) => p.key === recKey) || PLATFORMS[0];
+    const recAsset = amap[ASSET(recPlat.key)];
+
+    // 권장 다운로드
+    const primary = document.getElementById("primary");
+    if (recAsset) {
+      primary.innerHTML =
+        '<div class="desc">감지된 환경: <strong>' + recPlat.label + " · " + recPlat.sub +
+        "</strong></div>" +
+        '<a class="btn" href="' + recAsset.browser_download_url + '">' +
+        recPlat.label + " 다운로드 <span class=\"sz\">" + fmtSize(recAsset.size) + "</span></a>";
+    } else {
+      primary.innerHTML = '<div class="desc">아래 목록에서 플랫폼을 선택해 받으세요.</div>';
+    }
+
+    // 전체 목록
+    const grid = document.getElementById("grid");
+    grid.innerHTML = "";
+    for (const p of PLATFORMS) {
+      const a = amap[ASSET(p.key)];
+      const row = document.createElement("div");
+      row.className = "row";
+      const left = document.createElement("div");
+      left.innerHTML = '<div class="name">' + p.label + '</div><div class="sub">' +
+        p.sub + (a ? " · " + fmtSize(a.size) : "") + "</div>";
+      const right = document.createElement("div");
+      if (a) {
+        right.innerHTML = '<a class="dl" href="' + a.browser_download_url + '">다운로드</a>';
+      } else {
+        right.innerHTML = '<span class="sub">준비 안 됨</span>';
+      }
+      row.appendChild(left);
+      row.appendChild(right);
+      grid.appendChild(row);
+    }
+  }
+
+  load();
+</script>
+</body>
+</html>
