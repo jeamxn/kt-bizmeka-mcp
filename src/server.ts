@@ -27,6 +27,7 @@ import { BizmekaError } from "./errors.ts";
 import * as mail from "./mail.ts";
 import * as calendar from "./calendar.ts";
 import { store, trust } from "./storage/index.ts";
+import type { OAuthRouter } from "./oauth/router.ts";
 
 const VERSION = "0.3.0";
 
@@ -121,7 +122,7 @@ async function tryRelogin(client: BizmekaClient): Promise<boolean> {
  * skip re-entry. If the server session has died, transparently re-logs in
  * (no SMS, via the stored browserCertify cookie + password) and retries once.
  */
-async function withClient(
+async function withSession(
   sessionId: string,
   fn: (client: BizmekaClient) => Promise<object>,
 ) {
@@ -147,11 +148,78 @@ async function withClient(
   }
 }
 
-function buildServer(): McpServer {
+function buildServer(authedUsername?: string): McpServer {
   const server = new McpServer(
     { name: "kt-bizmeka", version: VERSION },
     { instructions: INSTRUCTIONS },
   );
+
+  // --- Remote (OAuth) auto-session ----------------------------------------
+  // When the server is built for an OAuth-authenticated user, tools resolve the
+  // bizmeka client automatically from the stored trust — the remote user never
+  // calls login_start/verify_otp (OAuth already did the bizmeka login). The
+  // generated tool-session sid is cached here (per MCP connection).
+  let autoSid: string | null = null;
+
+  async function ensureAutoClient(): Promise<
+    { client: BizmekaClient; err: null } | { client: null; err: object }
+  > {
+    const reauth = {
+      ok: false,
+      error:
+        "bizmeka 인증이 만료되었습니다. 커넥터를 다시 연결(재인증)해 주세요.",
+    };
+    if (autoSid) {
+      const sess = await store.get(autoSid);
+      if (sess?.client.isLoggedIn) return { client: sess.client, err: null };
+    }
+    const rec = await trust.read(authedUsername!);
+    if (!rec?.password) return { client: null, err: reauth };
+    const client = new BizmekaClient(authedUsername!, rec.password);
+    client.loadCookies(rec.cookies);
+    try {
+      const { needs2fa } = await client.submitCredentials();
+      if (needs2fa) return { client: null, err: reauth };
+    } catch {
+      return { client: null, err: reauth };
+    }
+    // Refresh the remembered cookies and open a tool session.
+    await trust.save(authedUsername!, client.dumpCookies(), rec.password);
+    autoSid = await store.create(client, "");
+    await store.save(autoSid, client, { authenticated: true });
+    return { client, err: null };
+  }
+
+  // Bound variant used in OAuth mode: ignores the caller-supplied session_id and
+  // operates on the auto-resolved client (auto re-login on dead session).
+  async function withBoundClient(
+    _sessionId: string,
+    fn: (client: BizmekaClient) => Promise<object>,
+  ) {
+    const { client, err } = await ensureAutoClient();
+    if (err) return ok(err);
+    try {
+      const payload = await fn(client!);
+      await store.save(autoSid!, client!);
+      return ok(payload);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (isSessionDead(msg) && (await tryRelogin(client!))) {
+        try {
+          const payload = await fn(client!);
+          await store.save(autoSid!, client!, { authenticated: true });
+          return ok(payload);
+        } catch (e2) {
+          return ok(errPayload(e2));
+        }
+      }
+      return ok(errPayload(e));
+    }
+  }
+
+  // In OAuth mode every webmail/planner tool auto-resolves the client; in
+  // stdio/file mode they use the explicit session_id flow.
+  const withClient = authedUsername ? withBoundClient : withSession;
 
   server.registerTool(
     "bizmeka_man",
@@ -899,15 +967,29 @@ function isInitializeRequest(body: unknown): boolean {
   return Array.isArray(body) ? body.some(check) : check(body);
 }
 
-function runHttp(): void {
+async function runHttp(): Promise<void> {
   const host = process.env.MCP_HOST ?? "0.0.0.0";
   const port = Number(process.env.MCP_PORT ?? "8000");
+  const dbMode = (process.env.STORAGE ?? "file").toLowerCase() === "db";
+
+  // OAuth is only active in db mode. The router is imported dynamically so the
+  // stdio binary (and file-mode http) never bundle the Postgres driver.
+  const oauth: OAuthRouter | null = dbMode
+    ? (await import("./oauth/router.ts")).createRouter()
+    : null;
 
   // Stateful: one transport (+ MCP server) per MCP session, keyed by the
   // session id the SDK generates on initialize. The client echoes that id in
   // the `mcp-session-id` header on every subsequent request. Login state also
   // lives in `store` (process-global) and is shared across all sessions.
   const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
+
+  /** Extract a Bearer token from the Authorization header. */
+  const bearerOf = (req: Request): string | null => {
+    const h = req.headers.get("authorization") ?? "";
+    const m = /^Bearer\s+(.+)$/i.exec(h);
+    return m ? m[1]!.trim() : null;
+  };
 
   Bun.serve({
     hostname: host,
@@ -918,8 +1000,24 @@ function runHttp(): void {
       if (url.pathname === "/health") {
         return new Response("ok", { status: 200 });
       }
+
+      // OAuth endpoints (db mode): discovery, registration, authorize, token.
+      if (oauth) {
+        const handled = await oauth.handle(req, url);
+        if (handled) return handled;
+      }
+
       if (url.pathname !== "/mcp" && url.pathname !== "/mcp/") {
         return new Response("Not Found", { status: 404 });
+      }
+
+      // In db mode, /mcp is gated behind a valid Bearer access token.
+      let authedUsername: string | undefined;
+      if (oauth) {
+        const tok = bearerOf(req);
+        const user = tok ? await oauth.resolveBearer(tok) : null;
+        if (!user) return oauth.unauthorized(req);
+        authedUsername = user;
       }
 
       const sessionId = req.headers.get("mcp-session-id") ?? undefined;
@@ -972,14 +1070,17 @@ function runHttp(): void {
       transport.onclose = () => {
         if (transport.sessionId) transports.delete(transport.sessionId);
       };
-      const server = buildServer();
+      // In OAuth mode the server is bound to the authenticated bizmeka user so
+      // tools auto-resolve the client (no manual login_start/verify_otp).
+      const server = buildServer(authedUsername);
       await server.connect(transport);
       return transport.handleRequest(req, { parsedBody: body });
     },
   });
   // eslint-disable-next-line no-console
   console.error(
-    `kt-bizmeka MCP (streamable-http) listening on ${host}:${port}/mcp`,
+    `kt-bizmeka MCP (streamable-http) listening on ${host}:${port}/mcp` +
+      (dbMode ? " (OAuth 2.1 enabled)" : ""),
   );
 }
 
@@ -990,7 +1091,7 @@ function main(): void {
     transport === "streamable-http" ||
     transport === "streamable_http"
   ) {
-    runHttp();
+    void runHttp();
   } else {
     void runStdio();
   }

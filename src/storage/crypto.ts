@@ -12,7 +12,9 @@ import {
   createCipheriv,
   createDecipheriv,
   createHash,
+  createHmac,
   randomBytes,
+  timingSafeEqual,
 } from "node:crypto";
 
 const IV_LEN = 12;
@@ -87,4 +89,57 @@ export function decryptJson<T>(blob: Buffer | Uint8Array): T {
 /** sha256 hex digest — used to store tokens/codes without the raw secret. */
 export function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * HMAC key for signed identity cookies, derived from MASTER_KEY so we don't
+ * need a separate env var. Domain-separated from the AES key by the label.
+ */
+function hmacKey(): Buffer {
+  return createHash("sha256")
+    .update(masterKey())
+    .update("kt-bizmeka:as-cookie:v1")
+    .digest();
+}
+
+/**
+ * Sign a payload into a compact, URL-safe, tamper-evident token:
+ *   base64url(JSON(payload)) + "." + base64url(HMAC)
+ * Used for the long-lived AS identity cookie (carries the bizmeka username)
+ * that enables fully-automatic re-auth at /authorize without re-entering
+ * credentials. Includes an expiry so a stolen cookie eventually dies.
+ */
+export function signCookie(payload: Record<string, unknown>): string {
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const mac = createHmac("sha256", hmacKey()).update(body).digest("base64url");
+  return `${body}.${mac}`;
+}
+
+/**
+ * Verify + decode a token produced by signCookie(). Returns the payload, or
+ * null if the signature is invalid, malformed, or (when an `exp` field is
+ * present) expired.
+ */
+export function verifyCookie<T = Record<string, unknown>>(
+  token: string | null | undefined,
+): T | null {
+  if (!token) return null;
+  const dot = token.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const body = token.slice(0, dot);
+  const mac = token.slice(dot + 1);
+  const expected = createHmac("sha256", hmacKey())
+    .update(body)
+    .digest("base64url");
+  const a = Buffer.from(mac);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (typeof payload.exp === "number" && Date.now() > payload.exp) return null;
+  return payload as T;
 }
