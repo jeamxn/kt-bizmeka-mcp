@@ -170,26 +170,20 @@ function buildServer(): McpServer {
     {
       description:
         "KT 비즈메카 EZ 로그인을 시작한다. 아이디/비밀번호로 1차 인증을 수행한다. " +
-        "이전에 remember_me=true 로 로그인한 적이 있으면 SMS 없이 바로 로그인이 완료되고 " +
+        "이전에 로그인한 적이 있으면(신뢰 브라우저 기억됨) SMS 없이 바로 로그인이 완료되고 " +
         "logged_in=true 가 반환된다(이 경우 verify_otp 불필요). 그렇지 않으면 등록된 휴대폰으로 " +
-        "SMS 인증번호를 발송하고, 반환된 session_id 와 인증번호로 bizmeka_verify_otp 를 호출한다.",
+        "SMS 인증번호를 발송하고, 반환된 session_id 와 인증번호로 bizmeka_verify_otp 를 호출한다. " +
+        "로그인 정보는 항상 기억되어 이후 무인 재로그인에 쓰인다(끄려면 bizmeka_logout).",
       inputSchema: {
         username: z.string().describe("비즈메카 아이디"),
         password: z.string().describe("비즈메카 비밀번호"),
-        remember_me: z
-          .boolean()
-          .optional()
-          .describe(
-            "True 면 (a) 저장된 신뢰 브라우저 쿠키로 SMS 생략 로그인을 시도하고, (b) 이번 로그인 성공 시 이후 무인 재로그인용으로 신뢰 쿠키를 저장한다. 기본 True.",
-          ),
       },
     },
-    async ({ username, password, remember_me }) => {
-      const remember = remember_me ?? true;
+    async ({ username, password }) => {
       const client = new BizmekaClient(username, password);
-      // Try a previously-remembered browser: load its cookies so 1st-factor
-      // can complete without SMS.
-      if (remember) {
+      // Always try a previously-remembered browser: load its cookies so the
+      // 1st-factor can complete without SMS.
+      {
         const trusted = trust.load(username);
         if (trusted) client.loadCookies(trusted);
       }
@@ -197,9 +191,7 @@ function buildServer(): McpServer {
         const { needs2fa } = await client.submitCredentials();
         if (!needs2fa) {
           // Trusted-browser fast path: already logged in, no SMS needed.
-          if (remember) {
-            trust.save(username, client.dumpCookies(), password);
-          }
+          trust.save(username, client.dumpCookies(), password);
           const sid = store.create(client, "");
           store.save(sid, client, { authenticated: true });
           return ok({
@@ -214,7 +206,7 @@ function buildServer(): McpServer {
         await client.sendSms(); // SMS to registered phone
       } catch (e) {
         // A stale trust cookie can break 1st-factor; retry once cleanly.
-        if (remember && trust.load(username)) {
+        if (trust.load(username)) {
           trust.drop(username);
           const fresh = new BizmekaClient(username, password);
           try {
@@ -260,17 +252,14 @@ function buildServer(): McpServer {
     "bizmeka_verify_otp",
     {
       description:
-        "SMS 인증번호로 2차 인증을 완료하고 포털에 로그인한다.",
+        "SMS 인증번호로 2차 인증을 완료하고 포털에 로그인한다. 신뢰 브라우저는 항상 기억되어 " +
+        "이후 SMS 없이 무인 재로그인된다(끄려면 bizmeka_logout).",
       inputSchema: {
         session_id: z.string().describe("bizmeka_login_start 가 반환한 세션 ID"),
         cert_key: z.string().describe("휴대폰으로 받은 인증번호"),
-        remember_browser: z
-          .boolean()
-          .optional()
-          .describe("True 면 이후 이 브라우저(쿠키jar)에서 2차 인증 생략"),
       },
     },
-    async ({ session_id, cert_key, remember_browser }) => {
+    async ({ session_id, cert_key }) => {
       const sess = store.get(session_id);
       if (!sess) {
         return ok({
@@ -281,7 +270,7 @@ function buildServer(): McpServer {
       try {
         const portalUrl = await sess.client.verifyOtp(
           cert_key.trim(),
-          remember_browser ?? false,
+          true, // always remember this browser (skip SMS next time)
         );
         // Persist the now-authenticated state (isLogin cookie etc.) so the next
         // tool call — which may run in a freshly spawned process — sees it.
@@ -289,14 +278,12 @@ function buildServer(): McpServer {
           authenticated: true,
           portalUrl,
         });
-        // If the user opted in, remember this browser so future logins skip SMS.
-        if (remember_browser) {
-          trust.save(
-            sess.client.username,
-            sess.client.dumpCookies(),
-            sess.client.password,
-          );
-        }
+        // Always remember this browser so future logins skip SMS.
+        trust.save(
+          sess.client.username,
+          sess.client.dumpCookies(),
+          sess.client.password,
+        );
         return ok({
           ok: true,
           session_id,

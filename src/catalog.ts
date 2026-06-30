@@ -36,23 +36,21 @@ export const CATALOG: Record<string, ToolDoc> = {
     args: {
       username: "비즈메카 아이디",
       password: "비즈메카 비밀번호",
-      remember_me:
-        "(선택, 기본 true) 저장된 신뢰 쿠키로 SMS 생략 로그인 시도 + 성공 시 무인 재로그인용으로 쿠키·비번 저장",
     },
     returns:
       '{"ok": true, "session_id": "...", "logged_in": true|미정, "message": "..."}',
     notes:
-      "logged_in:true 면 SMS 없이 이미 로그인된 것 — verify_otp 불필요. 그렇지 않으면 SMS가 발송되니 받은 번호로 bizmeka_verify_otp 를 호출. 인증번호 유효시간 약 3분.",
+      "로그인 정보는 항상 기억된다(무인 재로그인용 쿠키·비번 저장; 끄려면 bizmeka_logout). logged_in:true 면 SMS 없이 이미 로그인된 것 — verify_otp 불필요. 그렇지 않으면 SMS가 발송되니 받은 번호로 bizmeka_verify_otp 를 호출. 인증번호 유효시간 약 3분.",
   },
   bizmeka_verify_otp: {
     summary: "SMS 인증번호로 2차 인증 완료 + SAML SSO → 포털(ezportal) 진입.",
     args: {
       session_id: "bizmeka_login_start 가 반환한 세션 ID",
       cert_key: "휴대폰으로 받은 인증번호",
-      remember_browser: "(선택) True 면 이후 이 세션 쿠키에서 2차 인증 생략",
     },
     returns: '{"ok": true, "logged_in": true, "portal_url": "..."}',
-    notes: "login_start 이후 약 3분 안에 호출해야 한다. 세션 만료 시 처음부터 다시.",
+    notes:
+      "신뢰 브라우저는 항상 기억되어 이후 SMS 없이 무인 재로그인된다. login_start 이후 약 3분 안에 호출해야 한다. 세션 만료 시 처음부터 다시.",
   },
   bizmeka_session_status: {
     summary: "현재 세션의 로그인 상태 확인.",
@@ -268,13 +266,13 @@ export const WORKFLOWS: Record<string, Workflow> = {
     description:
       "비즈메카는 SMS 2차 인증이 필수라, 사람이 인증번호를 읽는 단계가 끼어 " +
       "있다. 따라서 로그인은 두 번의 툴 호출로 나뉜다. 단, 한 번 " +
-      "verify_otp(remember_browser=true)로 인증해두면 이후엔 신뢰 브라우저 쿠키 + " +
+      "verify_otp 로 인증해두면 이후엔 신뢰 브라우저 쿠키 + " +
       "저장된 비밀번호로 SMS 없이 자동 재로그인된다(서버 세션이 죽어도 툴 호출 시 " +
       "투명하게 복구). bizmeka_logout 으로 이 저장 정보를 지울 수 있다.",
     steps: [
       "bizmeka_login_start(username, password)  → 기억된 신뢰 브라우저 있으면 즉시 logged_in:true, 없으면 SMS 발송 + session_id 수령",
       "(SMS가 발송된 경우) 사용자가 휴대폰 인증번호 확인",
-      "bizmeka_verify_otp(session_id, cert_key, remember_browser=true) → 2차 인증 + SSO, 포털 진입 + 무인 재로그인 정보 저장",
+      "bizmeka_verify_otp(session_id, cert_key) → 2차 인증 + SSO, 포털 진입 (신뢰 브라우저 항상 기억 → 무인 재로그인)",
       "bizmeka_session_status(session_id)       → (선택) 로그인 상태 확인",
       "bizmeka_logout(username 또는 session_id, all)  → 저장된 로그인 정보 삭제(무인 재로그인 차단)",
     ],
