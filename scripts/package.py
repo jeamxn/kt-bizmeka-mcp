@@ -44,13 +44,13 @@ def version_from_pkg() -> str:
     return pkg["version"]
 
 
-def plugin_json(version: str, plat: str, cmd: str) -> str:
+def plugin_json(version: str, plat: str, cmd: str, build: str) -> str:
     obj = {
         "name": "kt-bizmeka",
         "version": version,
         "description": (
             "KT 비즈메카 EZ 자동화 — RSA 로그인/SMS 2차인증/SAML SSO + 웹메일. "
-            f"Bun standalone 바이너리 ({plat})."
+            f"Bun standalone 바이너리 ({plat}, build {build})."
         ),
         "author": {"name": "jeamxn"},
         "homepage": "https://github.com/jeamxn/kt-bizmeka-mcp",
@@ -81,8 +81,13 @@ def add_file(zf: zipfile.ZipFile, arcname: str, data: bytes, *, executable: bool
 
 
 def main() -> int:
-    tag = sys.argv[1] if len(sys.argv) > 1 else f"v{version_from_pkg()}"
-    version = tag[1:] if tag.startswith("v") else tag
+    # The optional arg is the build tag (e.g. v20260630-1206 from CI). The
+    # plugin.json `version` stays a real semver from package.json so the Claude
+    # Code plugin manifest validates; the calendar build tag goes in the
+    # description and is what the zips/release are named after.
+    build_tag = sys.argv[1] if len(sys.argv) > 1 else f"v{version_from_pkg()}"
+    build = build_tag[1:] if build_tag.startswith("v") else build_tag
+    version = version_from_pkg()
 
     OUT.mkdir(exist_ok=True)
     marketplace = (ROOT / ".claude-plugin" / "marketplace.json").read_bytes()
@@ -112,7 +117,7 @@ def main() -> int:
         with zipfile.ZipFile(zip_path, "w") as zf:
             add_file(zf, binname, bin_data, executable=not is_win)
             add_file(zf, ".claude-plugin/plugin.json",
-                     plugin_json(version, plat, cmd).encode("utf-8"))
+                     plugin_json(version, plat, cmd, build).encode("utf-8"))
             add_file(zf, ".claude-plugin/marketplace.json", marketplace)
             if readme:
                 add_file(zf, "README.md", readme)

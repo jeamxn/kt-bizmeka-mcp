@@ -58,12 +58,8 @@ function localBinary(name) {
 }
 
 function cachePath(name) {
-  const dir = path.join(
-    os.homedir(),
-    ".cache",
-    "kt-bizmeka-mcp",
-    VERSION,
-  );
+  // Cache under the package semver; bump package.json version to invalidate.
+  const dir = path.join(os.homedir(), ".cache", "kt-bizmeka-mcp", VERSION);
   return { dir, file: path.join(dir, name) };
 }
 
@@ -107,9 +103,11 @@ async function resolveBinary() {
   const { dir, file } = cachePath(name);
   if (fs.existsSync(file)) return file;
 
-  // Download from the GitHub Release for this version.
+  // Download from the latest GitHub Release (calendar-tagged on every push to
+  // main). `releases/latest/download/<name>` redirects to the newest release's
+  // asset, so we don't need to know the exact tag.
   fs.mkdirSync(dir, { recursive: true });
-  const url = `https://github.com/${REPO}/releases/download/v${VERSION}/${name}`;
+  const url = `https://github.com/${REPO}/releases/latest/download/${name}`;
   process.stderr.write(
     `[kt-bizmeka launcher] 바이너리를 받는 중: ${url}\n`,
   );
@@ -119,7 +117,7 @@ async function resolveBinary() {
     fail(
       `바이너리 다운로드 실패 (${e.message}).\n` +
         `소스 체크아웃이라면 'bun run build' 로 dist/${name} 를 만들거나,\n` +
-        `릴리스(v${VERSION})에 바이너리가 올라와 있는지 확인하세요.`,
+        `최신 릴리스에 ${name} 바이너리가 올라와 있는지 확인하세요.`,
     );
   }
   if (process.platform !== "win32") {

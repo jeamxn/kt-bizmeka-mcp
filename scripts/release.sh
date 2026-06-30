@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
 # Local release helper: build all platform binaries, package per-platform plugin
-# zips, and publish binaries + zips to a GitHub Release whose tag matches the
-# package.json version (v<version>).
+# zips, and publish binaries + zips to a GitHub Release under a calendar tag
+# vYYYYMMDD-HHMM (KST) — same scheme CI uses on every push to main.
 #
-# CI does this automatically on tag push (see .github/workflows/release.yml);
-# this script is for cutting a release by hand.
+# CI does this automatically (see .github/workflows/release.yml); this script is
+# for cutting a release by hand from a local checkout.
 #
 # Requires: bun, python3, gh (authenticated).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VERSION=$(node -p "require('./package.json').version")
-TAG="v${VERSION}"
+TAG="$(TZ=Asia/Seoul date +'v%Y%m%d-%H%M')"
 
 echo "==> building all targets for ${TAG}"
 bun run scripts/build.ts
