@@ -1,13 +1,44 @@
+# KT bizmeka EZ MCP — remote deployment (dokploy + Traefik).
+#
+# Fill these dokploy env slots (NOT committed): POSTGRES_PASSWORD, MASTER_KEY,
+# PUBLIC_URL. Generate a key with:  openssl rand -base64 32
+#
+# Networking: no host `ports:` — dokploy/Traefik routes the public domain to
+# the mcp service's exposed port. Postgres stays on the internal compose network.
 services:
-  kt-bizmeka-mcp:
+  mcp:
     build:
       context: .
       dockerfile: Dockerfile
     environment:
-      MCP_TRANSPORT: streamable-http
+      MCP_TRANSPORT: http
+      STORAGE: db
       MCP_HOST: 0.0.0.0
       MCP_PORT: "8000"
-    # Dokploy/Traefik routes by domain — expose only, no host port binding.
+      DATABASE_URL: postgres://bizmeka:${POSTGRES_PASSWORD}@db:5432/bizmeka
+      MASTER_KEY: ${MASTER_KEY}
+      PUBLIC_URL: ${PUBLIC_URL}
     expose:
-      - "8000"
+      - "8000"          # no host port binding — dokploy/Traefik routes the domain
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bizmeka
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: bizmeka
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bizmeka"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

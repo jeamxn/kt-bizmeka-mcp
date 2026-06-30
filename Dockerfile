@@ -1,32 +1,38 @@
-# KT bizmeka EZ MCP server — Bun standalone binary
-# Build the linux binary in a Bun image, then run it on a tiny base with no
-# runtime installed (the binary embeds Bun).
-FROM oven/bun:1.3 AS build
+# KT bizmeka EZ MCP — remote HTTP server (OAuth 2.1 + Postgres).
+#
+# Runs the TypeScript source directly on the Bun runtime (NOT a --compile
+# binary): the db backend loads the `postgres` driver dynamically, and running
+# on the full runtime avoids any single-binary bundling surprises with the
+# driver. The local stdio `exe` is still produced separately via `bun run build`.
+FROM oven/bun:1.3 AS deps
 WORKDIR /app
-
-# Install deps first (cached layer) using only manifests
 COPY package.json bun.lock* ./
 RUN bun install --frozen-lockfile || bun install
 
-# Build the standalone binary for the image's architecture
-COPY tsconfig.json ./
-COPY src ./src
-COPY scripts ./scripts
-RUN mkdir -p dist && \
-    bun build src/server.ts --compile --minify --outfile dist/kt-bizmeka-mcp
-
-# --- runtime: distroless-ish, just glibc; the binary brings its own runtime ---
-FROM debian:bookworm-slim AS runtime
+FROM oven/bun:1.3 AS runtime
 WORKDIR /app
-COPY --from=build /app/dist/kt-bizmeka-mcp /usr/local/bin/kt-bizmeka-mcp
 
-# Deployed as a long-running HTTP service. stdio transport exits on stdin EOF
-# (which makes a bare container restart-loop), so default to streamable-http here.
-ENV MCP_TRANSPORT=streamable-http \
+# App + deps
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json tsconfig.json ./
+COPY src ./src
+
+# Remote service defaults. STORAGE=db turns on the OAuth Authorization Server.
+# DATABASE_URL, MASTER_KEY and PUBLIC_URL are injected at deploy time (dokploy).
+ENV MCP_TRANSPORT=http \
+    STORAGE=db \
     MCP_HOST=0.0.0.0 \
-    MCP_PORT=8000
+    MCP_PORT=8000 \
+    NODE_ENV=production
 
-# Dokploy/Traefik routes by domain; only expose, do not bind host ports.
+# Run as the non-root user the Bun image ships with.
+USER bun
+
+# Dokploy/Traefik routes by domain; only expose, never bind host ports.
 EXPOSE 8000
 
-ENTRYPOINT ["kt-bizmeka-mcp"]
+# Container-level healthcheck hits the unauthenticated /health endpoint.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD bun --eval "fetch('http://127.0.0.1:'+(process.env.MCP_PORT||8000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+CMD ["bun", "run", "src/server.ts"]
