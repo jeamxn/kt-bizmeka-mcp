@@ -137,8 +137,16 @@ export class BizmekaClient {
   }
 
   // -- step 2: submit encrypted credentials -----------------------------
-  /** Perform 1st-factor login. Expects a 302 to the 2nd-step page. */
-  async submitCredentials(): Promise<void> {
+  /**
+   * Perform 1st-factor login (RSA-encrypted id/pw + CSRF).
+   *
+   * Returns whether 2nd-factor (SMS) is still required:
+   *   - { needs2fa: true }  → normal path; caller does sendSms() + verifyOtp().
+   *   - { needs2fa: false } → this cookie jar was previously "remembered"
+   *     (browserCertify=Y), so the server completed login here without SMS.
+   *     `isLogin=Y` is already set; the caller can use the session directly.
+   */
+  async submitCredentials(): Promise<{ needs2fa: boolean }> {
     const ctx = await this.loadLoginContext();
     const rsa = new RSAEncryptor(ctx.modulus, ctx.exponent);
     const securedUser = rsa.encrypt(this.username);
@@ -160,7 +168,12 @@ export class BizmekaClient {
       },
     });
     const location = r.headers.get("location") ?? "";
-    if (r.status === 302 && location.includes("secondStepVerif")) return;
+    // Trusted browser (browserCertify cookie present): login completes here,
+    // no secondStepVerif redirect, and isLogin=Y is already set. Skip SMS.
+    if (this.isLoggedIn) return { needs2fa: false };
+    if (r.status === 302 && location.includes("secondStepVerif")) {
+      return { needs2fa: true };
+    }
     if (r.status === 302 && location.includes("loginForm")) {
       throw new BizmekaError(
         "로그인 실패: 아이디 또는 비밀번호가 올바르지 않습니다.",

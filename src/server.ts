@@ -26,7 +26,7 @@ import { BizmekaClient } from "./client.ts";
 import { BizmekaError } from "./errors.ts";
 import * as mail from "./mail.ts";
 import * as calendar from "./calendar.ts";
-import { store } from "./session.ts";
+import { store, trust } from "./session.ts";
 
 const VERSION = "0.3.0";
 
@@ -115,21 +115,78 @@ function buildServer(): McpServer {
     "bizmeka_login_start",
     {
       description:
-        "KT 비즈메카 EZ 로그인을 시작한다. 아이디/비밀번호로 1차 인증을 수행하고, 등록된 " +
-        "휴대폰으로 SMS 인증번호를 발송한다. 반환된 session_id 와 사용자가 받은 인증번호로 " +
-        "bizmeka_verify_otp 를 호출해 로그인을 완료한다.",
+        "KT 비즈메카 EZ 로그인을 시작한다. 아이디/비밀번호로 1차 인증을 수행한다. " +
+        "이전에 remember_me=true 로 로그인한 적이 있으면 SMS 없이 바로 로그인이 완료되고 " +
+        "logged_in=true 가 반환된다(이 경우 verify_otp 불필요). 그렇지 않으면 등록된 휴대폰으로 " +
+        "SMS 인증번호를 발송하고, 반환된 session_id 와 인증번호로 bizmeka_verify_otp 를 호출한다.",
       inputSchema: {
         username: z.string().describe("비즈메카 아이디"),
         password: z.string().describe("비즈메카 비밀번호"),
+        remember_me: z
+          .boolean()
+          .optional()
+          .describe(
+            "True 면 (a) 저장된 신뢰 브라우저 쿠키로 SMS 생략 로그인을 시도하고, (b) 이번 로그인 성공 시 이후 무인 재로그인용으로 신뢰 쿠키를 저장한다. 기본 True.",
+          ),
       },
     },
-    async ({ username, password }) => {
+    async ({ username, password, remember_me }) => {
+      const remember = remember_me ?? true;
       const client = new BizmekaClient(username, password);
+      // Try a previously-remembered browser: load its cookies so 1st-factor
+      // can complete without SMS.
+      if (remember) {
+        const trusted = trust.load(username);
+        if (trusted) client.loadCookies(trusted);
+      }
       try {
-        await client.submitCredentials(); // 1st factor (RSA + CSRF + login.do)
+        const { needs2fa } = await client.submitCredentials();
+        if (!needs2fa) {
+          // Trusted-browser fast path: already logged in, no SMS needed.
+          if (remember) trust.save(username, client.dumpCookies());
+          const sid = store.create(client, "");
+          store.save(sid, client, { authenticated: true });
+          return ok({
+            ok: true,
+            session_id: sid,
+            logged_in: true,
+            message:
+              "신뢰 브라우저로 SMS 없이 로그인 완료. 바로 사용 가능합니다 (verify_otp 불필요).",
+          });
+        }
         await client.loadSecondStep();
         await client.sendSms(); // SMS to registered phone
       } catch (e) {
+        // A stale trust cookie can break 1st-factor; retry once cleanly.
+        if (remember && trust.load(username)) {
+          trust.drop(username);
+          const fresh = new BizmekaClient(username, password);
+          try {
+            const { needs2fa } = await fresh.submitCredentials();
+            if (!needs2fa) {
+              const sid = store.create(fresh, "");
+              store.save(sid, fresh, { authenticated: true });
+              return ok({
+                ok: true,
+                session_id: sid,
+                logged_in: true,
+                message: "로그인 완료 (신뢰 쿠키 갱신 필요).",
+              });
+            }
+            await fresh.loadSecondStep();
+            await fresh.sendSms();
+            const sid = store.create(fresh, "");
+            return ok({
+              ok: true,
+              session_id: sid,
+              message:
+                "인증번호를 등록된 휴대폰으로 발송했습니다. 받은 인증번호로 " +
+                "bizmeka_verify_otp 를 호출하세요. (유효시간 약 3분)",
+            });
+          } catch (e2) {
+            return ok(errPayload(e2));
+          }
+        }
         return ok(errPayload(e));
       }
       const sid = store.create(client, "");
@@ -176,6 +233,10 @@ function buildServer(): McpServer {
           authenticated: true,
           portalUrl,
         });
+        // If the user opted in, remember this browser so future logins skip SMS.
+        if (remember_browser) {
+          trust.save(sess.client.username, sess.client.dumpCookies());
+        }
         return ok({
           ok: true,
           session_id,

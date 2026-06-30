@@ -201,3 +201,77 @@ class SessionStore {
 }
 
 export const store = new SessionStore();
+
+// ---------------------------------------------------------------------------
+// Trusted-browser store: persists the "remember this browser" cookies
+// (browserCertify=Y et al.) per username, so a future login can skip SMS 2FA.
+//
+// Verified live: after verifyOtp(rememberBrowser=true), the cookie jar carries
+// a long-lived token cookie. Re-submitting 1st-factor credentials with that
+// cookie present logs in WITHOUT an SMS step (isLogin=Y set on login.do).
+//
+// These cookies are long-lived (server-defined expiry), so unlike sessions they
+// have NO idle TTL — we keep them until login stops accepting them, at which
+// point the caller falls back to the normal SMS flow and re-saves.
+// ---------------------------------------------------------------------------
+import type { Cookie } from "./http.ts";
+
+interface TrustFile {
+  username: string;
+  cookies: Cookie[];
+  savedAt: number;
+}
+
+function trustDir(): string {
+  const base = join(sessionDir(), "trust");
+  try {
+    mkdirSync(base, { recursive: true, mode: 0o700 });
+  } catch {
+    /* sessionDir already ensured a writable base */
+  }
+  return base;
+}
+
+/** Filesystem-safe filename for a username (base64url, no separators). */
+function trustFileFor(username: string): string {
+  const safe = Buffer.from(username, "utf8").toString("base64url");
+  return join(trustDir(), `${safe}.json`);
+}
+
+class TrustStore {
+  /** Persist the long-lived "remembered browser" cookies for a username. */
+  save(username: string, cookies: Cookie[]): void {
+    try {
+      writeFileSync(
+        trustFileFor(username),
+        JSON.stringify({ username, cookies, savedAt: Date.now() } as TrustFile),
+        { mode: 0o600 },
+      );
+    } catch {
+      /* best-effort; trust is an optimization, not required for correctness */
+    }
+  }
+
+  /** Load remembered cookies for a username, or null if none saved. */
+  load(username: string): Cookie[] | null {
+    try {
+      const data = JSON.parse(
+        readFileSync(trustFileFor(username), "utf8"),
+      ) as TrustFile;
+      return data.cookies ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Forget a username's remembered cookies (e.g. after they stop working). */
+  drop(username: string): void {
+    try {
+      unlinkSync(trustFileFor(username));
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+export const trust = new TrustStore();
