@@ -10,7 +10,12 @@
  * process per tool call, so an in-memory Map is empty on the second call and
  * every login fails with "세션이 만료되었거나 존재하지 않습니다". We therefore
  * persist each session to disk (a small JSON file keyed by sid) so it survives
- * process restarts. Sessions expire so stale cookie jars don't pile up.
+ * process restarts. Sessions expire on INACTIVITY (a sliding window keyed off
+ * the last use) so stale cookie jars don't pile up, while a session that's
+ * actively being used — e.g. reading mail, then composing a long HTML mail
+ * before sending — stays alive. (A previous version keyed expiry off the fixed
+ * createdAt, which hard-killed in-use sessions 10 minutes after login_start and
+ * surfaced as a spurious "세션이 만료되었거나 존재하지 않습니다" mid-task.)
  */
 
 import { randomBytes } from "node:crypto";
@@ -26,8 +31,11 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { BizmekaClient, type ClientState } from "./client.ts";
 
-// How long a session (SMS sent, OTP pending, or freshly logged in) stays valid.
-const SESSION_TTL_MS = 600_000;
+// How long a session stays valid AFTER ITS LAST USE (sliding idle window).
+// Each successful tool call refreshes this via store.save(). Set generously so
+// a human reading/composing mail between calls doesn't get logged out; stale
+// abandoned sessions (OTP never entered, etc.) still get GC'd after this idle.
+const SESSION_IDLE_TTL_MS = 1_800_000; // 30 min of inactivity
 
 /** Where session files live. Honors MCP_SESSION_DIR, else ~/.cache, else tmp. */
 function sessionDir(): string {
@@ -57,6 +65,8 @@ function safeJoin(...parts: string[]): string | null {
 interface SessionFile {
   state: ClientState;
   createdAt: number;
+  /** Refreshed on every save(); expiry is measured from this, not createdAt. */
+  lastUsedAt: number;
   authenticated: boolean;
   portalUrl: string | null;
   ssoRedirect: string;
@@ -76,8 +86,8 @@ function fileFor(sid: string): string {
   return join(sessionDir(), `${sid}.json`);
 }
 
-function expired(createdAt: number): boolean {
-  return Date.now() - createdAt > SESSION_TTL_MS;
+function expired(lastUsedAt: number): boolean {
+  return Date.now() - lastUsedAt > SESSION_IDLE_TTL_MS;
 }
 
 class SessionStore {
@@ -101,11 +111,12 @@ class SessionStore {
       try {
         const raw = readFileSync(p, "utf8");
         const data = JSON.parse(raw) as SessionFile;
-        if (expired(data.createdAt)) unlinkSync(p);
+        if (expired(data.lastUsedAt ?? data.createdAt)) unlinkSync(p);
       } catch {
         // Corrupt/unreadable file: best-effort cleanup if it's old enough.
         try {
-          if (Date.now() - statSync(p).mtimeMs > SESSION_TTL_MS) unlinkSync(p);
+          if (Date.now() - statSync(p).mtimeMs > SESSION_IDLE_TTL_MS)
+            unlinkSync(p);
         } catch {
           /* ignore */
         }
@@ -128,9 +139,11 @@ class SessionStore {
   create(client: BizmekaClient, ssoRedirect = ""): string {
     this.gc();
     const sid = randomBytes(16).toString("base64url");
+    const now = Date.now();
     this.write(sid, {
       state: client.dumpState(),
-      createdAt: Date.now(),
+      createdAt: now,
+      lastUsedAt: now,
       authenticated: false,
       portalUrl: null,
       ssoRedirect,
@@ -141,7 +154,7 @@ class SessionStore {
   get(sid: string): Session | undefined {
     const data = this.read(sid);
     if (!data) return undefined;
-    if (expired(data.createdAt)) {
+    if (expired(data.lastUsedAt ?? data.createdAt)) {
       this.drop(sid);
       return undefined;
     }
@@ -157,7 +170,9 @@ class SessionStore {
   /**
    * Persist the current client state + metadata back to disk after a tool
    * mutates it (e.g. verify_otp logs in, or a webmail call refreshes cookies).
-   * Preserves the original createdAt so the TTL window doesn't slide forever.
+   * Refreshes lastUsedAt so the idle-expiry window slides forward on every
+   * successful use — keeping an actively-used session alive — while createdAt
+   * is preserved for diagnostics.
    */
   save(
     sid: string,
@@ -169,6 +184,7 @@ class SessionStore {
     this.write(sid, {
       ...existing,
       state: client.dumpState(),
+      lastUsedAt: Date.now(),
       authenticated: patch.authenticated ?? existing.authenticated,
       portalUrl:
         patch.portalUrl !== undefined ? patch.portalUrl : existing.portalUrl,
