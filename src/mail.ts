@@ -216,35 +216,50 @@ export async function markRead(
 // Write operations
 // --------------------------------------------------------------------------
 /**
- * Open a compose draft (write.do) and return the server-issued dynamic tokens
- * the send.do call must echo back: `tempKey` and `_dsptok`. The browser fetches
- * these from write.do before every send; omitting them makes send.do 500.
+ * Prepare a compose draft and collect the three server-issued tokens send.do
+ * requires. Verified against live traffic — the browser does this in two calls
+ * and send.do 500s ("필요한 데이터가 누락되었습니다") without them:
+ *
+ *   1. POST mail/html/write.do  -> HTML compose page carrying hidden inputs
+ *      `_dsptok` (per-page anti-double-submit token) and a fresh page `_csrf`.
+ *      Neither appears in the JSON endpoint.
+ *   2. POST mail/json/write.do  -> JSON draft carrying `tempKey`.
+ *
+ * Both are posted with `first=""` (NOT "1" — sending first=1 here 500s).
  */
 async function prepareWrite(
   client: BizmekaClient,
   ukey?: string,
-): Promise<{ tempKey: string; dsptok: string }> {
-  const data: Record<string, string> = { first: "1" };
-  if (ukey) data.ukey = ukey;
-  const out = await postJson(client, "/mail/json/write.do", data);
-  const form = out.MailWriteForm ?? {};
-  const tempKey = form.tempKey;
+): Promise<{ tempKey: string; dsptok: string; pageCsrf: string }> {
+  const baseData: Record<string, string> = { first: "", to: "" };
+  if (ukey) baseData.ukey = ukey;
+
+  // 1) HTML compose page -> _dsptok + page-scoped _csrf (hidden inputs)
+  const htmlRes = await client.http.post(`${WEBMAIL_BASE}/mail/html/write.do`, {
+    headers: { ...ajaxHeaders(true), Accept: "text/html, */*; q=0.01" },
+    data: baseData,
+  });
+  if (htmlRes.status >= 400) {
+    throw new BizmekaError(
+      `html/write.do 응답 오류 (status=${htmlRes.status})`,
+    );
+  }
+  const dsptok =
+    /name=['"]_dsptok['"]\s+value=['"]([^'"]+)['"]/i.exec(htmlRes.text)?.[1] ??
+    "";
+  const pageCsrf =
+    /name=['"]_csrf['"]\s+value=['"]([^'"]+)['"]/i.exec(htmlRes.text)?.[1] ?? "";
+  if (!dsptok) {
+    throw new BizmekaError("html/write.do에서 _dsptok을 얻지 못했습니다.");
+  }
+
+  // 2) JSON draft -> tempKey
+  const out = await postJson(client, "/mail/json/write.do", baseData);
+  const tempKey = out.MailWriteForm?.tempKey;
   if (!tempKey) {
     throw new BizmekaError("write.do에서 tempKey를 얻지 못했습니다.");
   }
-  // _dsptok is a per-draft display token; key casing varies, so search the
-  // form for anything resembling dsptok and fall back to top-level.
-  const dsptok = findDsptok(form) ?? findDsptok(out) ?? "";
-  return { tempKey, dsptok };
-}
-
-/** Find a `*dsptok*` value anywhere in a (shallow) JSON object. */
-function findDsptok(obj: any): string | undefined {
-  if (!obj || typeof obj !== "object") return undefined;
-  for (const [k, v] of Object.entries(obj)) {
-    if (/dsptok/i.test(k) && typeof v === "string" && v) return v;
-  }
-  return undefined;
+  return { tempKey, dsptok, pageCsrf };
 }
 
 export async function checkReceivers(
@@ -289,8 +304,11 @@ export async function sendMail(
     replyUkey,
     isReceipt = false,
   } = opts;
-  const token = await requireWebmail(client);
-  const { tempKey, dsptok } = await prepareWrite(client, replyUkey);
+  await requireWebmail(client);
+  const { tempKey, dsptok, pageCsrf } = await prepareWrite(client, replyUkey);
+  // Prefer the page-scoped _csrf returned by html/write.do (matches the token
+  // the browser submits); fall back to the entry-time token if absent.
+  const token = pageCsrf || client.webmailCsrf || "";
 
   // Mirror the browser's send.do body field-for-field. The earlier minimal
   // payload (tempKey/to/subject/body/_csrf only) made the Spring controller
