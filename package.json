@@ -1,0 +1,29 @@
+{
+  "name": "kt-bizmeka-mcp",
+  "version": "0.2.0",
+  "description": "MCP server for KT bizmeka EZ (ezsso/ezportal) login automation — RSA credential encryption, CSRF handling, SMS 2FA, SAML SSO, and webmail. TypeScript/Bun port.",
+  "type": "module",
+  "license": "MIT",
+  "author": "jeamxn",
+  "homepage": "https://github.com/jeamxn/kt-bizmeka-mcp",
+  "repository": "https://github.com/jeamxn/kt-bizmeka-mcp",
+  "bin": {
+    "kt-bizmeka-mcp": "./dist/kt-bizmeka-mcp"
+  },
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "start": "bun run src/server.ts",
+    "build": "bun run scripts/build.ts",
+    "build:current": "bun build src/server.ts --compile --minify --outfile dist/kt-bizmeka-mcp",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
