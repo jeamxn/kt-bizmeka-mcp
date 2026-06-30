@@ -148,21 +148,52 @@ mcp_servers:
 
 ## Claude Code 플러그인
 
-이 repo는 Claude Code 플러그인 + 마켓플레이스로도 배포된다. 설치하면 `plugin.json`의 `mcpServers`에 인라인 정의된 서버가 자동 등록된다.
+이 repo는 Claude Code 플러그인으로 배포된다. 설치하면 `plugin.json`의 `mcpServers`에 인라인 정의된 서버가 자동 등록된다. 설치 경로는 두 가지다.
+
+### A. OS별 플러그인 zip (권장 — 바이너리 직접 실행)
+
+태그를 push하면 GitHub Actions가 OS/아키텍처별로 **바이너리 + `.claude-plugin/` 을 하나의 zip**으로 묶어 릴리스에 올린다 (`.github/workflows/release.yml`).
+
+```
+kt-bizmeka-plugin-darwin-arm64.zip
+kt-bizmeka-plugin-darwin-x64.zip
+kt-bizmeka-plugin-linux-x64.zip
+kt-bizmeka-plugin-linux-arm64.zip
+kt-bizmeka-plugin-windows-x64.zip
+```
+
+자기 OS에 맞는 zip을 받아 풀면 그 안의 `plugin.json` 이 같은 폴더의 바이너리를 **직접** 가리킨다 (node·uv 등 아무 런타임 불필요):
+
+```json
+"kt-bizmeka-local": {
+  "command": "${CLAUDE_PLUGIN_ROOT}/kt-bizmeka-mcp",
+  "env": { "MCP_TRANSPORT": "stdio" }
+}
+```
+
+압축을 푼 폴더를 플러그인으로 추가한다:
+
+```
+/plugin marketplace add /path/to/unzipped-folder
+/plugin install kt-bizmeka@kt-bizmeka
+```
+
+> macOS Finder / `unzip` CLI 는 바이너리의 실행권한(0755)을 보존한다. 혹시 실행 권한이 없다면 `chmod +x kt-bizmeka-mcp` 한 번이면 된다.
+
+### B. 레포 직접 추가 (소스/원격 http)
 
 ```
 /plugin marketplace add jeamxn/kt-bizmeka-mcp
 /plugin install kt-bizmeka@kt-bizmeka
 ```
 
-플러그인 구성:
-- `.claude-plugin/plugin.json` — 플러그인 매니페스트 + `mcpServers` 인라인:
-  - `kt-bizmeka` — 원격 http (`https://bizmeka-mcp.jeamxn.dev/mcp`), 기본 사용 권장. 설치 머신에 아무것도 필요 없음
-  - `kt-bizmeka-local` — `node scripts/launcher.cjs` 로 로컬 stdio 실행. 런처는 OS/아키텍처를 감지해 맞는 바이너리를 골라 실행한다:
-    1. 소스 체크아웃이면 `dist/`의 빌드 결과를 쓰고,
-    2. 마켓플레이스 설치처럼 `dist/`가 없으면 해당 버전의 **GitHub Release에서 바이너리를 한 번 받아** `~/.cache/kt-bizmeka-mcp/<version>/`에 저장한 뒤 실행한다.
+레포의 `.claude-plugin/plugin.json` 은:
+- `kt-bizmeka` — 원격 http (`https://bizmeka-mcp.jeamxn.dev/mcp`), 기본 사용 권장. 설치 머신에 아무것도 필요 없음
+- `kt-bizmeka-local` — `node scripts/launcher.cjs` 로 로컬 stdio 실행. 레포에는 빌드된 바이너리가 없으므로, 런처가 OS/아키텍처를 감지해:
+  1. 소스 체크아웃이면 `dist/`의 빌드 결과를 쓰고,
+  2. `dist/`가 없으면 해당 버전의 **GitHub Release에서 바이너리를 한 번 받아** `~/.cache/kt-bizmeka-mcp/<version>/`에 저장한 뒤 실행한다.
 
-    > Claude Code는 Node 위에서 돌기 때문에 `node`는 항상 사용 가능하다. 런처는 디스패치만 하고 실제 서버 로직은 전부 Bun 바이너리 안에 있다.
+  > Claude Code는 Node 위에서 돌기 때문에 `node`는 항상 사용 가능하다. 런처는 디스패치만 하고 실제 서버 로직은 전부 Bun 바이너리 안에 있다. OS별 zip(A안)을 쓰면 이 런처 단계도 생략된다.
 
 > 어떤 작업이든 시작 전에 `bizmeka_man` 툴을 먼저 호출해 현재 사용 가능한 툴과 워크플로우를 확인한다.
 
@@ -180,9 +211,12 @@ src/
   server.ts    MCP 진입점 + 툴 정의 (stdio / streamable-http transport)
 scripts/
   build.ts        크로스 컴파일 (5개 플랫폼)
-  release.sh      빌드 + GitHub Release 업로드
-  launcher.cjs    플러그인용 플랫폼 디스패처 (Node)
+  package.py      OS별 플러그인 zip 패키징 (바이너리 + .claude-plugin)
+  release.sh      빌드 + 패키징 + GitHub Release 업로드 (수동 릴리스용)
+  launcher.cjs    플러그인용 플랫폼 디스패처 (Node, 레포 직접 추가 케이스)
   mcp_smoke.sh    stdio MCP 핸드셰이크 스모크 테스트
+.github/workflows/
+  release.yml     태그 push 시 빌드→패키징→릴리스 업로드 자동화
 ```
 
 ## 면책

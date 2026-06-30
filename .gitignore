@@ -1,6 +1,7 @@
 # Node / Bun
 node_modules/
 dist/
+release/
 build/
 *.tsbuildinfo
 

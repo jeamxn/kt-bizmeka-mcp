@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Build all platform binaries and publish them to a GitHub Release whose tag
-# matches the package.json version (v<version>). The plugin launcher downloads
-# from exactly this release on first run.
+# Local release helper: build all platform binaries, package per-platform plugin
+# zips, and publish binaries + zips to a GitHub Release whose tag matches the
+# package.json version (v<version>).
 #
-# Requires: bun, gh (authenticated).
+# CI does this automatically on tag push (see .github/workflows/release.yml);
+# this script is for cutting a release by hand.
+#
+# Requires: bun, python3, gh (authenticated).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -14,13 +17,29 @@ TAG="v${VERSION}"
 echo "==> building all targets for ${TAG}"
 bun run scripts/build.ts
 
+echo "==> packaging per-platform plugin zips"
+python3 scripts/package.py "${TAG}"
+
+ASSETS=(
+  dist/kt-bizmeka-mcp-darwin-arm64
+  dist/kt-bizmeka-mcp-darwin-x64
+  dist/kt-bizmeka-mcp-linux-x64
+  dist/kt-bizmeka-mcp-linux-arm64
+  dist/kt-bizmeka-mcp-windows-x64.exe
+  release/kt-bizmeka-plugin-darwin-arm64.zip
+  release/kt-bizmeka-plugin-darwin-x64.zip
+  release/kt-bizmeka-plugin-linux-x64.zip
+  release/kt-bizmeka-plugin-linux-arm64.zip
+  release/kt-bizmeka-plugin-windows-x64.zip
+)
+
 echo "==> creating/uploading release ${TAG}"
 if gh release view "${TAG}" >/dev/null 2>&1; then
-  gh release upload "${TAG}" dist/kt-bizmeka-mcp-* --clobber
+  gh release upload "${TAG}" "${ASSETS[@]}" --clobber
 else
-  gh release create "${TAG}" dist/kt-bizmeka-mcp-* \
+  gh release create "${TAG}" "${ASSETS[@]}" \
     --title "${TAG}" \
-    --notes "kt-bizmeka-mcp ${TAG} — standalone binaries (mac/linux/windows)."
+    --generate-notes
 fi
 
 echo "==> done. Assets:"
