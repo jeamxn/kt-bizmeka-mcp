@@ -68,6 +68,28 @@ function loggedInClient(
   return { client: sess.client, err: null };
 }
 
+/**
+ * Run a webmail operation on the logged-in client for `sessionId`, then persist
+ * the (possibly refreshed: webmail _csrf, JSESSIONID cookies) client state back
+ * to disk. Because stdio hosts spawn a fresh process per tool call, saving here
+ * lets the next call skip the SAML webmail re-entry. `fn` returns the payload
+ * object to send (without ok wrapping).
+ */
+async function withClient(
+  sessionId: string,
+  fn: (client: BizmekaClient) => Promise<object>,
+) {
+  const { client, err } = loggedInClient(sessionId);
+  if (err) return ok(err);
+  try {
+    const payload = await fn(client!);
+    store.save(sessionId, client!);
+    return ok(payload);
+  } catch (e) {
+    return ok(errPayload(e));
+  }
+}
+
 function buildServer(): McpServer {
   const server = new McpServer(
     { name: "kt-bizmeka", version: VERSION },
@@ -147,8 +169,12 @@ function buildServer(): McpServer {
           cert_key.trim(),
           remember_browser ?? false,
         );
-        sess.authenticated = true;
-        sess.portalUrl = portalUrl;
+        // Persist the now-authenticated state (isLogin cookie etc.) so the next
+        // tool call — which may run in a freshly spawned process — sees it.
+        store.save(session_id, sess.client, {
+          authenticated: true,
+          portalUrl,
+        });
         return ok({
           ok: true,
           session_id,
@@ -189,15 +215,11 @@ function buildServer(): McpServer {
       description: "웹메일 메일함(폴더) 목록과 메일 수를 조회한다.",
       inputSchema: { session_id: z.string().describe("로그인된 세션 ID") },
     },
-    async ({ session_id }) => {
-      const { client, err } = loggedInClient(session_id);
-      if (err) return ok(err);
-      try {
-        return ok({ ok: true, folders: await mail.listFolders(client!) });
-      } catch (e) {
-        return ok(errPayload(e));
-      }
-    },
+    async ({ session_id }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        folders: await mail.listFolders(client),
+      })),
   );
 
   server.registerTool(
@@ -213,16 +235,11 @@ function buildServer(): McpServer {
         page: z.number().int().optional().describe("페이지 번호 (기본 1)"),
       },
     },
-    async ({ session_id, folder, page }) => {
-      const { client, err } = loggedInClient(session_id);
-      if (err) return ok(err);
-      try {
-        const res = await mail.listMails(client!, folder ?? "inbox", page ?? 1);
-        return ok({ ok: true, ...res });
-      } catch (e) {
-        return ok(errPayload(e));
-      }
-    },
+    async ({ session_id, folder, page }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        ...(await mail.listMails(client, folder ?? "inbox", page ?? 1)),
+      })),
   );
 
   server.registerTool(
@@ -235,18 +252,11 @@ function buildServer(): McpServer {
         folder: z.string().optional().describe("메일이 속한 폴더 (기본 inbox)"),
       },
     },
-    async ({ session_id, ukey, folder }) => {
-      const { client, err } = loggedInClient(session_id);
-      if (err) return ok(err);
-      try {
-        return ok({
-          ok: true,
-          mail: await mail.viewMail(client!, ukey, folder ?? "inbox"),
-        });
-      } catch (e) {
-        return ok(errPayload(e));
-      }
-    },
+    async ({ session_id, ukey, folder }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        mail: await mail.viewMail(client, ukey, folder ?? "inbox"),
+      })),
   );
 
   server.registerTool(
@@ -259,16 +269,10 @@ function buildServer(): McpServer {
         seen: z.boolean().optional().describe("True=읽음, False=안읽음 (기본 True)"),
       },
     },
-    async ({ session_id, ukeys, seen }) => {
-      const { client, err } = loggedInClient(session_id);
-      if (err) return ok(err);
-      try {
-        const okRes = await mail.markRead(client!, ukeys, seen ?? true);
-        return ok({ ok: okRes });
-      } catch (e) {
-        return ok(errPayload(e));
-      }
-    },
+    async ({ session_id, ukeys, seen }) =>
+      withClient(session_id, async (client) => ({
+        ok: await mail.markRead(client, ukeys, seen ?? true),
+      })),
   );
 
   server.registerTool(
@@ -290,11 +294,10 @@ function buildServer(): McpServer {
         is_receipt: z.boolean().optional().describe("수신확인 요청 여부"),
       },
     },
-    async ({ session_id, to, subject, body, cc, bcc, reply_ukey, is_receipt }) => {
-      const { client, err } = loggedInClient(session_id);
-      if (err) return ok(err);
-      try {
-        const res = await mail.sendMail(client!, {
+    async ({ session_id, to, subject, body, cc, bcc, reply_ukey, is_receipt }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        result: await mail.sendMail(client, {
           to,
           subject,
           body,
@@ -302,12 +305,8 @@ function buildServer(): McpServer {
           bcc: bcc ?? "",
           replyUkey: reply_ukey || undefined,
           isReceipt: is_receipt ?? false,
-        });
-        return ok({ ok: true, result: res });
-      } catch (e) {
-        return ok(errPayload(e));
-      }
-    },
+        }),
+      })),
   );
 
   server.registerTool(
@@ -321,18 +320,11 @@ function buildServer(): McpServer {
         bcc: z.string().optional().describe("숨은참조"),
       },
     },
-    async ({ session_id, to, cc, bcc }) => {
-      const { client, err } = loggedInClient(session_id);
-      if (err) return ok(err);
-      try {
-        return ok({
-          ok: true,
-          result: await mail.checkReceivers(client!, to, cc ?? "", bcc ?? ""),
-        });
-      } catch (e) {
-        return ok(errPayload(e));
-      }
-    },
+    async ({ session_id, to, cc, bcc }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        result: await mail.checkReceivers(client, to, cc ?? "", bcc ?? ""),
+      })),
   );
 
   server.registerTool(
@@ -345,16 +337,11 @@ function buildServer(): McpServer {
         search: z.string().optional().describe("검색어 (선택)"),
       },
     },
-    async ({ session_id, page, search }) => {
-      const { client, err } = loggedInClient(session_id);
-      if (err) return ok(err);
-      try {
-        const res = await mail.listReceipts(client!, page ?? 1, search ?? "");
-        return ok({ ok: true, ...res });
-      } catch (e) {
-        return ok(errPayload(e));
-      }
-    },
+    async ({ session_id, page, search }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        ...(await mail.listReceipts(client, page ?? 1, search ?? "")),
+      })),
   );
 
   server.registerTool(
@@ -368,15 +355,11 @@ function buildServer(): McpServer {
         mail_key: z.string().describe("취소할 메일의 mail_key (bizmeka_mail_receipts 결과)"),
       },
     },
-    async ({ session_id, mail_key }) => {
-      const { client, err } = loggedInClient(session_id);
-      if (err) return ok(err);
-      try {
-        return ok({ ok: true, result: await mail.cancelSend(client!, mail_key) });
-      } catch (e) {
-        return ok(errPayload(e));
-      }
-    },
+    async ({ session_id, mail_key }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        result: await mail.cancelSend(client, mail_key),
+      })),
   );
 
   return server;

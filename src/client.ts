@@ -57,6 +57,20 @@ export interface LoginContext {
   csrfToken: string;
 }
 
+/**
+ * Serializable snapshot of a client mid-login, so the authenticated state can
+ * survive between two MCP tool calls even when the host (e.g. Claude cowork)
+ * spawns a fresh stdio process per call. Contains everything `verifyOtp` and
+ * the webmail tools need; the password is NOT included (only needed for the
+ * 1st factor, which has already happened by the time we persist).
+ */
+export interface ClientState {
+  username: string;
+  ctx: LoginContext | null;
+  cookies: Cookie[];
+  webmailCsrf: string | null;
+}
+
 export class BizmekaClient {
   readonly http: HttpClient;
   private ctx: LoginContext | null = null;
@@ -333,6 +347,25 @@ export class BizmekaClient {
 
   loadCookies(cookies: Cookie[]): void {
     this.http.cookies.load(cookies);
+  }
+
+  /** Full serializable snapshot (cookies + login context) for cross-process reuse. */
+  dumpState(): ClientState {
+    return {
+      username: this.username,
+      ctx: this.ctx,
+      cookies: this.http.cookies.dump(),
+      webmailCsrf: this.webmailCsrf,
+    };
+  }
+
+  /** Rebuild a client from a snapshot. Password is unknown post-1st-factor (unused here). */
+  static restore(state: ClientState): BizmekaClient {
+    const client = new BizmekaClient(state.username, "");
+    client.ctx = state.ctx;
+    client.webmailCsrf = state.webmailCsrf;
+    client.http.cookies.load(state.cookies);
+    return client;
   }
 
   // ===================== WEBMAIL (ezwebmail) ============================
