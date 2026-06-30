@@ -26,7 +26,7 @@ import { BizmekaClient } from "./client.ts";
 import { BizmekaError } from "./errors.ts";
 import * as mail from "./mail.ts";
 import * as calendar from "./calendar.ts";
-import { store, trust } from "./session.ts";
+import { store, trust } from "./storage/index.ts";
 
 const VERSION = "0.3.0";
 
@@ -53,10 +53,12 @@ function errPayload(e: unknown): { ok: false; error: string } {
 }
 
 /** Resolve an authenticated client from a session, or return an error payload. */
-function loggedInClient(
+async function loggedInClient(
   sessionId: string,
-): { client: BizmekaClient; err: null } | { client: null; err: object } {
-  const sess = store.get(sessionId);
+): Promise<
+  { client: BizmekaClient; err: null } | { client: null; err: object }
+> {
+  const sess = await store.get(sessionId);
   if (!sess) {
     return {
       client: null,
@@ -99,7 +101,7 @@ async function tryRelogin(client: BizmekaClient): Promise<boolean> {
     /* fall through to trust-store cookies */
   }
   // Reload remembered cookies for this user and retry once.
-  const trusted = trust.load(client.username);
+  const trusted = await trust.load(client.username);
   if (trusted) {
     client.loadCookies(trusted);
     try {
@@ -123,11 +125,11 @@ async function withClient(
   sessionId: string,
   fn: (client: BizmekaClient) => Promise<object>,
 ) {
-  const { client, err } = loggedInClient(sessionId);
+  const { client, err } = await loggedInClient(sessionId);
   if (err) return ok(err);
   try {
     const payload = await fn(client!);
-    store.save(sessionId, client!);
+    await store.save(sessionId, client!);
     return ok(payload);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -135,7 +137,7 @@ async function withClient(
     if (isSessionDead(msg) && (await tryRelogin(client!))) {
       try {
         const payload = await fn(client!);
-        store.save(sessionId, client!, { authenticated: true });
+        await store.save(sessionId, client!, { authenticated: true });
         return ok(payload);
       } catch (e2) {
         return ok(errPayload(e2));
@@ -189,7 +191,7 @@ function buildServer(): McpServer {
     async ({ username, password }) => {
       // Resolve credentials: fall back to the remembered account when omitted.
       if (!username) {
-        const remembered = trust.mostRecentUsername();
+        const remembered = await trust.mostRecentUsername();
         if (!remembered) {
           return ok({
             ok: false,
@@ -200,7 +202,7 @@ function buildServer(): McpServer {
         username = remembered;
       }
       if (!password) {
-        const stored = trust.loadPassword(username);
+        const stored = await trust.loadPassword(username);
         if (!stored) {
           return ok({
             ok: false,
@@ -213,16 +215,16 @@ function buildServer(): McpServer {
       // Always try a previously-remembered browser: load its cookies so the
       // 1st-factor can complete without SMS.
       {
-        const trusted = trust.load(username);
+        const trusted = await trust.load(username);
         if (trusted) client.loadCookies(trusted);
       }
       try {
         const { needs2fa } = await client.submitCredentials();
         if (!needs2fa) {
           // Trusted-browser fast path: already logged in, no SMS needed.
-          trust.save(username, client.dumpCookies(), password);
-          const sid = store.create(client, "");
-          store.save(sid, client, { authenticated: true });
+          await trust.save(username, client.dumpCookies(), password);
+          const sid = await store.create(client, "");
+          await store.save(sid, client, { authenticated: true });
           return ok({
             ok: true,
             session_id: sid,
@@ -239,15 +241,15 @@ function buildServer(): McpServer {
         // the persisted trust here — the durable browserCertify cookie is what
         // lets future logins skip SMS, and this failure may be transient. It is
         // only refreshed on a successful login below.
-        const hadTrust = Boolean(trust.load(username));
+        const hadTrust = Boolean(await trust.load(username));
         if (hadTrust) {
           const fresh = new BizmekaClient(username, password);
           try {
             const { needs2fa } = await fresh.submitCredentials();
             if (!needs2fa) {
-              trust.save(username, fresh.dumpCookies(), password);
-              const sid = store.create(fresh, "");
-              store.save(sid, fresh, { authenticated: true });
+              await trust.save(username, fresh.dumpCookies(), password);
+              const sid = await store.create(fresh, "");
+              await store.save(sid, fresh, { authenticated: true });
               return ok({
                 ok: true,
                 session_id: sid,
@@ -257,7 +259,7 @@ function buildServer(): McpServer {
             }
             await fresh.loadSecondStep();
             await fresh.sendSms();
-            const sid = store.create(fresh, "");
+            const sid = await store.create(fresh, "");
             return ok({
               ok: true,
               session_id: sid,
@@ -271,7 +273,7 @@ function buildServer(): McpServer {
         }
         return ok(errPayload(e));
       }
-      const sid = store.create(client, "");
+      const sid = await store.create(client, "");
       return ok({
         ok: true,
         session_id: sid,
@@ -294,7 +296,7 @@ function buildServer(): McpServer {
       },
     },
     async ({ session_id, cert_key }) => {
-      const sess = store.get(session_id);
+      const sess = await store.get(session_id);
       if (!sess) {
         return ok({
           ok: false,
@@ -308,12 +310,12 @@ function buildServer(): McpServer {
         );
         // Persist the now-authenticated state (isLogin cookie etc.) so the next
         // tool call — which may run in a freshly spawned process — sees it.
-        store.save(session_id, sess.client, {
+        await store.save(session_id, sess.client, {
           authenticated: true,
           portalUrl,
         });
         // Always remember this browser so future logins skip SMS.
-        trust.save(
+        await trust.save(
           sess.client.username,
           sess.client.dumpCookies(),
           sess.client.password,
@@ -338,7 +340,7 @@ function buildServer(): McpServer {
       inputSchema: { session_id: z.string().describe("확인할 세션 ID") },
     },
     async ({ session_id }) => {
-      const sess = store.get(session_id);
+      const sess = await store.get(session_id);
       if (!sess) {
         return ok({ ok: false, error: "세션이 만료되었거나 존재하지 않습니다." });
       }
@@ -375,23 +377,23 @@ function buildServer(): McpServer {
     async ({ username, session_id, all }) => {
       const dropped: string[] = [];
       if (all) {
-        for (const u of trust.listUsernames()) {
-          trust.drop(u);
+        for (const u of await trust.listUsernames()) {
+          await trust.drop(u);
           dropped.push(u);
         }
       } else {
         // Resolve username from the session if not given explicitly.
         let user = username;
         if (!user && session_id) {
-          const sess = store.get(session_id);
+          const sess = await store.get(session_id);
           user = sess?.client.username;
         }
         if (user) {
-          trust.drop(user);
+          await trust.drop(user);
           dropped.push(user);
         }
       }
-      if (session_id) store.drop(session_id);
+      if (session_id) await store.drop(session_id);
       if (dropped.length === 0 && !session_id) {
         return ok({
           ok: false,
