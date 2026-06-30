@@ -1,23 +1,24 @@
-# KT bizmeka EZ MCP server
-FROM python:3.12-slim
-
-# uv: fast, reproducible installs from pyproject + uv.lock
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
-ENV UV_LINK_MODE=copy \
-    UV_COMPILE_BYTECODE=1 \
-    UV_PYTHON_DOWNLOADS=never \
-    PYTHONUNBUFFERED=1
-
+# KT bizmeka EZ MCP server — Bun standalone binary
+# Build the linux binary in a Bun image, then run it on a tiny base with no
+# runtime installed (the binary embeds Bun).
+FROM oven/bun:1.3 AS build
 WORKDIR /app
 
-# Install dependencies first (cached layer) using only manifests
-COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-install-project --no-dev
+# Install deps first (cached layer) using only manifests
+COPY package.json bun.lock* ./
+RUN bun install --frozen-lockfile || bun install
 
-# Now copy the source and install the project itself
+# Build the standalone binary for the image's architecture
+COPY tsconfig.json ./
 COPY src ./src
-RUN uv sync --frozen --no-dev
+COPY scripts ./scripts
+RUN mkdir -p dist && \
+    bun build src/server.ts --compile --minify --outfile dist/kt-bizmeka-mcp
+
+# --- runtime: distroless-ish, just glibc; the binary brings its own runtime ---
+FROM debian:bookworm-slim AS runtime
+WORKDIR /app
+COPY --from=build /app/dist/kt-bizmeka-mcp /usr/local/bin/kt-bizmeka-mcp
 
 # Deployed as a long-running HTTP service. stdio transport exits on stdin EOF
 # (which makes a bare container restart-loop), so default to streamable-http here.
@@ -28,4 +29,4 @@ ENV MCP_TRANSPORT=streamable-http \
 # Dokploy/Traefik routes by domain; only expose, do not bind host ports.
 EXPOSE 8000
 
-ENTRYPOINT ["uv", "run", "--no-sync", "kt-bizmeka-mcp"]
+ENTRYPOINT ["kt-bizmeka-mcp"]
