@@ -106,7 +106,7 @@ MCP_TRANSPORT=http MCP_PORT=8000 ./dist/kt-bizmeka-mcp-linux-x64   # http
 
 ## 릴리스 (바이너리 배포)
 
-**main 브랜치에 push될 때마다** GitHub Actions가 그 시점 KST 시간으로 캘린더 태그 `vYYYYMMDD-HHMM` (예: `v20260630-1206`) 를 만들어 바이너리 + OS별 플러그인 zip을 릴리스에 자동 업로드한다 (`.github/workflows/release.yml`).
+**main 브랜치에 push될 때마다** GitHub Actions가 그 시점 KST 시간으로 캘린더 태그 `vYYYYMMDD-HHMM` (예: `v20260630-1206`) 를 만들어 **OS별 플러그인 zip 5개**를 릴리스에 자동 업로드한다 (`.github/workflows/release.yml`). 릴리스 자산은 plugin zip 뿐이며, 바이너리는 각 zip 안에 들어 있다.
 
 손으로 릴리스를 끊으려면 (gh 인증 필요):
 
@@ -195,7 +195,7 @@ kt-bizmeka-plugin-windows-x64.zip
 - `kt-bizmeka` — 원격 http (`https://bizmeka-mcp.jeamxn.dev/mcp`), 기본 사용 권장. 설치 머신에 아무것도 필요 없음
 - `kt-bizmeka-local` — `node scripts/launcher.cjs` 로 로컬 stdio 실행. 레포에는 빌드된 바이너리가 없으므로, 런처가 OS/아키텍처를 감지해:
   1. 소스 체크아웃이면 `dist/`의 빌드 결과를 쓰고,
-  2. `dist/`가 없으면 **최신 GitHub Release(`releases/latest`)에서 바이너리를 한 번 받아** `~/.cache/kt-bizmeka-mcp/<version>/`에 저장한 뒤 실행한다.
+  2. `dist/`가 없으면 **최신 GitHub Release(`releases/latest`)에서 자기 OS의 plugin zip을 받아 그 안의 바이너리를 추출**해 `~/.cache/kt-bizmeka-mcp/<version>/`에 저장한 뒤 실행한다.
 
   > Claude Code는 Node 위에서 돌기 때문에 `node`는 항상 사용 가능하다. 런처는 디스패치만 하고 실제 서버 로직은 전부 Bun 바이너리 안에 있다. OS별 zip(A안)을 쓰면 이 런처 단계도 생략된다.
 

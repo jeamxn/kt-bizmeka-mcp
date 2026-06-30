@@ -20,11 +20,6 @@ echo "==> packaging per-platform plugin zips"
 python3 scripts/package.py "${TAG}"
 
 ASSETS=(
-  dist/kt-bizmeka-mcp-darwin-arm64
-  dist/kt-bizmeka-mcp-darwin-x64
-  dist/kt-bizmeka-mcp-linux-x64
-  dist/kt-bizmeka-mcp-linux-arm64
-  dist/kt-bizmeka-mcp-windows-x64.exe
   release/kt-bizmeka-plugin-darwin-arm64.zip
   release/kt-bizmeka-plugin-darwin-x64.zip
   release/kt-bizmeka-plugin-linux-x64.zip
