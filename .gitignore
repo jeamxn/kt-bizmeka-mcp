@@ -4,6 +4,9 @@ dist/
 release/
 build/
 *.tsbuildinfo
+# build:current output at repo root
+/kt-bizmeka-mcp
+/kt-bizmeka-mcp.exe
 
 # Python (legacy)
 __pycache__/
