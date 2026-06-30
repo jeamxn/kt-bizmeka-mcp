@@ -190,7 +190,9 @@ export async function handleAuthorizePost(req: Request): Promise<Response> {
   return errorPage("잘못된 요청입니다.");
 }
 
-/** Step 1: id/pw → bizmeka 1st factor (+ SMS), or trusted fast path → code. */
+/** Step 1: id/pw → bizmeka 1st factor + SMS. Web logins ALWAYS require a fresh
+ *  password check + OTP (no trusted-cookie fast path — that let anyone log in
+ *  with just a known username via the shared browserCertify cookie). */
 /** Structural view of FormData (avoids undici-vs-DOM FormData type clash). */
 type Form = { get(name: string): unknown };
 
@@ -204,23 +206,20 @@ async function stepCredentials(
     return loginPage(flow.flow_id, "아이디와 비밀번호를 모두 입력하세요.");
   }
 
+  // Fresh client with a CLEAN cookie jar: do NOT load remembered browserCertify
+  // cookies here. Loading them would let bizmeka skip the password check + SMS,
+  // so anyone typing a known username (any password) could log in. Web auth must
+  // always verify the password and complete SMS OTP.
   const client = new BizmekaClient(username, password);
-  // Reuse any remembered browser cookies so the 1st factor can skip SMS.
-  const remembered = await trust.load(username);
-  if (remembered) client.loadCookies(remembered);
 
   try {
     const { needs2fa } = await client.submitCredentials();
     if (!needs2fa) {
-      // Trusted-browser fast path: already authenticated, no SMS.
-      await trust.save(username, client.dumpCookies(), password);
-      const code = await issueCode(flow, username);
-      await dropFlow(flow.flow_id);
-      return redirectWithCode(
-        flow.redirect_uri,
-        code,
-        flow.state,
-        asCookieFor(username),
+      // With a clean jar this should not happen (the account uses SMS 2FA).
+      // Refuse rather than issue a code without OTP.
+      return loginPage(
+        flow.flow_id,
+        "2차 인증을 시작할 수 없습니다. 잠시 후 다시 시도해 주세요.",
       );
     }
     await client.loadSecondStep();
