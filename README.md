@@ -117,16 +117,48 @@ bun run scripts/build.ts     # 바이너리만 로컬에 빌드
 
 > 플러그인 zip 안의 `plugin.json` `version` 필드는 `package.json`의 semver(예: `0.2.0`)를 유지한다 (Claude Code 플러그인 매니페스트 검증 통과용). 캘린더 빌드 태그는 릴리스/zip 이름과 `description`의 `build ...` 에 들어간다.
 
-## Docker (배포)
+## Docker (원격 배포 — OAuth 2.1 + Postgres)
 
-멀티스테이지: `oven/bun` 이미지에서 linux 바이너리를 컴파일하고, 런타임 이미지엔 바이너리만 복사한다 (런타임 미설치). 기본값 `MCP_TRANSPORT=streamable-http`, 포트 8000 노출.
+원격 HTTP 서버는 **OAuth 2.1 인증**을 붙인다. `/authorize` 페이지 자체가 bizmeka 로그인(아이디/비번 → SMS → OTP)이고, 통과해야만 MCP 액세스 토큰이 발급된다. 한 번 인증한 브라우저는 서명된 식별 쿠키로 기억되어 **다음부터는 폼 없이 자동으로** 연결된다. 자격증명·쿠키·비번은 `MASTER_KEY`로 AES-256-GCM 암호화되어 Postgres에 저장되며 로컬 디스크에는 남지 않는다.
+
+`Dockerfile`은 `--compile` 바이너리가 아니라 **Bun 런타임에서 소스를 직접 실행**한다(db 드라이버를 안정적으로 로드하기 위해). 기본값 `MCP_TRANSPORT=http`, `STORAGE=db`(OAuth on), 포트 8000 노출, 비-root 실행, `/health` 헬스체크.
+
+### 환경변수 (원격)
+
+| 변수 | 설명 |
+|---|---|
+| `STORAGE=db` | Postgres 백엔드 + OAuth AS 활성화 |
+| `DATABASE_URL` | `postgres://user:pass@host:5432/db` |
+| `MASTER_KEY` | base64 32바이트 (또는 64 hex). `openssl rand -base64 32` 로 생성 |
+| `PUBLIC_URL` | 발급자/리다이렉트 베이스, 예 `https://bizmeka-mcp.example.com` |
+
+### docker-compose (dokploy)
+
+`docker-compose.yml`에 `mcp` + `postgres:16` 서비스가 정의돼 있다. dokploy의 env 입력란에 **`POSTGRES_PASSWORD`, `MASTER_KEY`, `PUBLIC_URL`** 세 개를 채우면 된다.
 
 ```bash
-docker build -t kt-bizmeka-mcp .
-docker run --rm -p 8000:8000 kt-bizmeka-mcp   # http://localhost:8000/mcp
+docker compose up --build      # 로컬 테스트: mcp + db 둘 다 기동
+curl https://<도메인>/health   # ok
+curl https://<도메인>/.well-known/oauth-authorization-server   # discovery JSON
 ```
 
-Dokploy(Traefik) 배포 시에는 호스트 포트 바인딩 없이 `EXPOSE 8000`만 두고 도메인 라우팅으로 연결한다.
+> **dokploy(Traefik) 주의:** 호스트 포트 바인딩(`ports:`) 금지 — `expose`만 두고 도메인 라우팅으로 연결한다. 서버는 `X-Forwarded-Proto`를 신뢰해 발급자 URL을 https로 만든다(`PUBLIC_URL`을 명시하면 그 값이 우선). 컨테이너는 stateless(로그인 진행 상태까지 전부 DB)라 나중에 로드밸런서로 인스턴스를 늘려도 된다.
+
+### Claude에 원격 커넥터 추가
+
+OAuth 메타데이터를 Claude가 자동 디스커버리하므로, 커넥터 URL에 **`/mcp` 엔드포인트만** 넣으면 된다:
+
+```
+https://<도메인>/mcp
+```
+
+추가하면 브라우저 팝업으로 `/authorize`(= bizmeka 로그인 폼)가 뜬다. 아이디/비밀번호 입력 → 휴대폰 SMS 인증번호 입력 → 완료. 이후에는 폼 없이 자동 재연결된다. 액세스 토큰은 1시간, 리프레시 토큰으로 무기한 갱신된다(저장된 bizmeka 신뢰정보가 유효한 동안).
+
+> 원격 모드에서는 OAuth가 이미 bizmeka 로그인을 끝냈으므로, 에이전트는 `bizmeka_login_start`/`bizmeka_verify_otp`를 호출할 필요가 없다. 메일·일정 툴을 바로 쓰면 서버가 인증된 사용자의 bizmeka 클라이언트를 자동으로 붙인다.
+
+## Docker (로컬 stdio 바이너리, 참고)
+
+로컬용 단일 바이너리는 여전히 `bun run build`로 만든다(위 "단일 실행 바이너리 빌드" 참고). 원격 배포에는 위 OAuth compose를 쓴다.
 
 ## MCP 클라이언트 설정 (Hermes / Claude Desktop)
 
@@ -200,10 +232,23 @@ src/
   http.ts      쿠키 jar + 수동 리다이렉트 HTTP 클라이언트 (fetch 기반)
   client.ts    bizmeka 로그인 HTTP 흐름 (1차/2차/SSO) + 웹메일 SAML 진입
   mail.ts      웹메일 메일 작업 (목록/상세/발송/답장/수신확인/발송취소)
-  session.ts   진행중 로그인 세션 메모리 보관 (TTL)
   catalog.ts   툴 카탈로그 + 워크플로우 (man 툴의 데이터 소스)
   errors.ts    BizmekaError
-  server.ts    MCP 진입점 + 툴 정의 (stdio / streamable-http transport)
+  server.ts    MCP 진입점 + 툴 정의 + HTTP 라우팅 (stdio / streamable-http)
+  storage/     스토리지 추상화 — file(stdio) / db(원격 Postgres) 백엔드 선택
+    types.ts     SessionBackend / TrustBackend 인터페이스
+    file.ts      파일 백엔드 (~/.cache/kt-bizmeka/), 기존 stdio 동작
+    pg.ts        Postgres 연결 + 스키마 부트스트랩 (db 모드에서만 lazy 로드)
+    crypto.ts    AES-256-GCM seal/open + 서명 쿠키(HMAC) — MASTER_KEY 파생
+    db.ts        Postgres 세션/신뢰 백엔드 (암호화 저장)
+    index.ts     STORAGE env 로 백엔드 선택
+  oauth/       OAuth 2.1 Authorization Server (db 모드에서만 동적 로드)
+    metadata.ts  discovery 메타데이터 (RFC 8414 / RFC 9728)
+    clients.ts   Dynamic Client Registration (RFC 7591)
+    pages.ts     /authorize 로그인·OTP·오류 HTML (미니멀/에디토리얼)
+    authorize.ts /authorize GET/POST — bizmeka 로그인 + 자동 재인증 + code 발급
+    token.ts     /token — authorization_code(PKCE) + refresh_token + bearer 검증
+    router.ts    OAuth 라우트 디스패처 + /mcp bearer 게이트
 scripts/
   build.ts        크로스 컴파일 (5개 플랫폼)
   package.py      OS별 플러그인 zip 패키징 (바이너리 + .claude-plugin)
@@ -215,4 +260,4 @@ scripts/
 
 ## 면책
 
-본인 소유 계정에 대한 로그인 자동화 용도. 자격증명은 메모리상에서만 처리하며 디스크에 저장하지 않는다.
+본인 소유 계정에 대한 로그인 자동화 용도. 로컬(stdio) 모드는 자격증명을 메모리/로컬 캐시에서만 처리한다. 원격(db) 모드는 자동 재로그인을 위해 비밀번호·쿠키를 Postgres에 **`MASTER_KEY`로 AES-256-GCM 암호화**해 저장하며, 토큰은 sha256 해시로만 저장한다.
