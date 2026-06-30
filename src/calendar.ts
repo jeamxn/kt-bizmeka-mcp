@@ -32,15 +32,40 @@ export interface PlannerUser {
   teamName: string | null;
 }
 
-/** Parse a flexible date input into an ISO-8601 UTC string. */
+/**
+ * Parse a flexible date input into an ISO-8601 UTC string.
+ *
+ * NAIVE inputs (no timezone) are interpreted as KST (Asia/Seoul, +09:00),
+ * because this is a Korean groupware used by Korean users. So "2026-07-02 14:00"
+ * means 14:00 KST and is sent to the server as "2026-07-02T05:00:00.000Z".
+ * To override, pass an explicit offset/Z (e.g. "2026-07-02T14:00:00Z" or
+ * "...+00:00"), an epoch number, or a Date.
+ */
 function toIso(d: string | number | Date): string {
   if (d instanceof Date) return d.toISOString();
   if (typeof d === "number") return new Date(d).toISOString();
-  // Accept "YYYY-MM-DD", "YYYY-MM-DD HH:mm", ISO, or epoch-as-string.
   const s = d.trim();
   if (/^\d+$/.test(s)) return new Date(Number(s)).toISOString();
-  const norm = s.includes("T") ? s : s.replace(" ", "T");
-  const parsed = new Date(norm);
+
+  // Already has an explicit timezone (Z or ±HH:MM / ±HHMM)? Trust it.
+  if (/[zZ]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s)) {
+    const parsed = new Date(s);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BizmekaError(`날짜 형식을 해석할 수 없습니다: ${JSON.stringify(d)}`);
+    }
+    return parsed.toISOString();
+  }
+
+  // Naive value → interpret as KST (+09:00).
+  let norm = s.includes("T") ? s : s.replace(" ", "T");
+  if (!norm.includes("T")) {
+    norm = `${norm}T00:00:00`; // date-only → KST midnight
+  } else if (/T\d{2}:\d{2}$/.test(norm)) {
+    norm = `${norm}:00`; // add seconds
+  } else if (/T\d{2}$/.test(norm)) {
+    norm = `${norm}:00:00`;
+  }
+  const parsed = new Date(`${norm}+09:00`);
   if (Number.isNaN(parsed.getTime())) {
     throw new BizmekaError(`날짜 형식을 해석할 수 없습니다: ${JSON.stringify(d)}`);
   }
@@ -190,6 +215,11 @@ export interface ScheduleInput {
   schedulePublic?: boolean;
   /** Reminder alarms, e.g. [{type:"2",minutes:"30"}]. type 2=popup,3=mail (observed). */
   alarms?: Array<{ type: string; minutes: string }>;
+  /**
+   * Facility/resource reservations (회의실·공용설비). Pass the raw facility
+   * objects returned by listFacilities(); create.do echoes them back verbatim.
+   */
+  facilities?: any[];
 }
 
 /** Build the create/update JSON body shared by both endpoints. */
@@ -236,7 +266,7 @@ function buildScheduleBody(
       alarmTime: a.minutes,
     })),
     recurrences: [],
-    facilityList: [],
+    facilityList: input.facilities ?? [],
     fileLinkList: [],
   };
 }
@@ -326,3 +356,58 @@ export async function deleteSchedule(
   }
   return out;
 }
+
+// --------------------------------------------------------------------------
+// Facilities / resources (회의실·공용설비)
+// --------------------------------------------------------------------------
+const FACILITY_BASE = `${GROUPWARE_BASE}/groupware/facility`;
+
+/**
+ * List facilities available for a time window, with their current reservations.
+ * Verified-live endpoint: POST /groupware/facility/getFacilitiesAndReserves.do
+ *
+ * Two kinds:
+ *   - conferenceRoom=true  → 회의실 (body: isConferenceRoom=true&...&scheduleId=)
+ *   - conferenceRoom=false → 공용설비/equipment (adds categoryId, may be empty)
+ *
+ * Returns the raw facility objects. Pass the ones you want straight into
+ * createSchedule({ facilities: [...] }) — create.do echoes them back verbatim.
+ */
+export async function listFacilities(
+  client: BizmekaClient,
+  startDate: string | number | Date,
+  endDate: string | number | Date,
+  opts: { conferenceRoom?: boolean; categoryId?: string } = {},
+): Promise<any> {
+  await client.requireGroupware();
+  const tok = await client.groupwareAjaxToken();
+  const conf = opts.conferenceRoom ?? true;
+  const data: Record<string, string> = {
+    startDate: String(toEpochMs(startDate)),
+    endDate: String(toEpochMs(endDate)),
+    isConferenceRoom: conf ? "true" : "false",
+    scheduleId: "",
+  };
+  if (!conf) data.categoryId = opts.categoryId ?? "";
+
+  const headers = client.groupwareHeaders(tok);
+  // Referer must point at the facility popup, not the planner page.
+  headers.Referer = `${FACILITY_BASE}/${conf ? "conferenceRoomPopup" : "facilityPopup"}.do`;
+  const r = await client.http.post(
+    `${FACILITY_BASE}/getFacilitiesAndReserves.do`,
+    { headers, data },
+  );
+  if (r.status >= 400) {
+    throw new BizmekaError(
+      `getFacilitiesAndReserves.do 응답 오류 (status=${r.status})`,
+    );
+  }
+  try {
+    return JSON.parse(r.text);
+  } catch {
+    throw new BizmekaError(
+      `설비 목록 응답을 JSON으로 파싱하지 못했습니다: ${r.text.slice(0, 200)}`,
+    );
+  }
+}
+

@@ -170,7 +170,7 @@ export const CATALOG: Record<string, ToolDoc> = {
     args: {
       session_id: "로그인된 세션 ID",
       title: "일정 제목",
-      start_date: "시작 일시 ('2026-07-02 14:00' 또는 ISO). 종일이면 날짜만",
+      start_date: "시작 일시 ('2026-07-02 14:00' = KST). 종일이면 날짜만",
       end_date: "종료 일시",
       contents: "내용/메모 (선택)",
       place: "장소 (선택)",
@@ -178,10 +178,26 @@ export const CATALOG: Record<string, ToolDoc> = {
       category_id: "분류 ID (선택, 기본 '1'=업무)",
       is_public: "공개 일정 여부 (선택)",
       alarm_minutes: "미리 알림(분) 배열 (선택, 예: [30, 15])",
+      facility_ids:
+        "예약할 회의실/공용설비 facilityId 배열 (선택). bizmeka_facility_list 로 조회",
     },
     returns: '{"ok": true, "schedule_id": "..."}',
     notes:
-      "현재 사용자가 참석자로 자동 추가된다. 시간 입력은 별도 표기가 없으면 UTC 로 해석되니, KST 라면 ISO 오프셋(예: 2026-07-02T14:00:00+09:00)으로 주는 것이 안전하다. 실제 생성되므로 사용자 확인 권장.",
+      "현재 사용자가 참석자로 자동 추가된다. 시간은 기본 KST(한국 시간)로 해석된다 — '2026-07-02 14:00'은 한국시간 오후 2시. 다른 시간대면 ISO 오프셋(예: ...T14:00:00Z)을 명시한다. 회의실/설비 예약은 bizmeka_facility_list 로 facilityId 를 얻어 facility_ids 에 넣는다. 실제 생성되므로 사용자 확인 권장.",
+  },
+  bizmeka_facility_list: {
+    summary: "예약 가능한 회의실/공용설비 목록 조회.",
+    args: {
+      session_id: "로그인된 세션 ID",
+      start_date: "이용 시작 일시 (KST)",
+      end_date: "이용 종료 일시 (KST)",
+      conference_room: "true=회의실(기본), false=공용설비/장비",
+      category_id: "공용설비 분류 ID (conference_room=false 일 때만, 선택)",
+    },
+    returns:
+      '{"ok": true, "facilities": [{facilityId, facilityName, categoryName, capacity, ...}], "reserves": [...]}',
+    notes:
+      "여기서 얻은 facilityId 를 bizmeka_calendar_create/update 의 facility_ids 에 넣어 예약한다. reserves 는 해당 시간대 기존 예약 현황.",
   },
   bizmeka_calendar_update: {
     summary: "기존 일정 수정 (전체 덮어쓰기).",
@@ -275,7 +291,8 @@ export const WORKFLOWS: Record<string, Workflow> = {
     steps: [
       "bizmeka_calendar_list(session_id, start_date, end_date) → 일정 목록 + scheduleId",
       "bizmeka_calendar_get(session_id, schedule_id)           → (선택) 상세 확인",
-      "bizmeka_calendar_create(session_id, title, start_date, end_date, ...) → 등록",
+      "(회의실/설비 필요시) bizmeka_facility_list(session_id, start_date, end_date) → facilityId 확보",
+      "bizmeka_calendar_create(session_id, title, start_date, end_date, facility_ids=[...]) → 등록",
       "bizmeka_calendar_update(session_id, schedule_id, ...)   → 수정 (전체 덮어쓰기)",
       "bizmeka_calendar_move(session_id, schedule_id, start_date, end_date) → 시간만 이동",
       "bizmeka_calendar_delete(session_id, schedule_id)        → 삭제",

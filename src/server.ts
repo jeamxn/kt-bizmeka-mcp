@@ -446,6 +446,12 @@ function buildServer(): McpServer {
       .array(z.number().int())
       .optional()
       .describe("미리 알림(분) 목록. 예: [30, 15]. 비우면 알림 없음"),
+    facility_ids: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "예약할 회의실/공용설비의 facilityId 목록. bizmeka_facility_list 로 먼저 조회해 얻는다. 해당 설비 객체를 자동으로 채워 예약한다.",
+      ),
   };
 
   function toAlarms(mins?: number[]) {
@@ -453,12 +459,88 @@ function buildServer(): McpServer {
     return (mins ?? []).map((m) => ({ type: "2", minutes: String(m) }));
   }
 
+  /**
+   * Resolve facility_ids into the full facility objects create.do expects, by
+   * querying both conference rooms and equipment for the schedule's window and
+   * matching by facilityId. Throws if any requested id isn't available.
+   */
+  async function resolveFacilities(
+    client: BizmekaClient,
+    facilityIds: string[] | undefined,
+    startDate: string,
+    endDate: string,
+  ): Promise<any[]> {
+    if (!facilityIds || facilityIds.length === 0) return [];
+    const [rooms, equip] = await Promise.all([
+      calendar.listFacilities(client, startDate, endDate, {
+        conferenceRoom: true,
+      }),
+      calendar.listFacilities(client, startDate, endDate, {
+        conferenceRoom: false,
+      }),
+    ]);
+    const all: any[] = [
+      ...(rooms.facilities ?? []),
+      ...(equip.facilities ?? []),
+    ];
+    const picked: any[] = [];
+    for (const id of facilityIds) {
+      const f = all.find((x) => String(x.facilityId) === String(id));
+      if (!f) {
+        throw new BizmekaError(
+          `설비 ID ${id} 를 찾을 수 없습니다. bizmeka_facility_list 로 사용 가능한 ID를 확인하세요.`,
+        );
+      }
+      picked.push(f);
+    }
+    return picked;
+  }
+
+  server.registerTool(
+    "bizmeka_facility_list",
+    {
+      description:
+        "예약 가능한 회의실 또는 공용설비 목록을 조회한다. 일정 생성 시 facility_ids 에 넣을 facilityId 를 여기서 얻는다.",
+      inputSchema: {
+        session_id: z.string().describe("로그인된 세션 ID"),
+        start_date: z.string().describe("이용 시작 일시 (KST 기준)"),
+        end_date: z.string().describe("이용 종료 일시 (KST 기준)"),
+        conference_room: z
+          .boolean()
+          .optional()
+          .describe("true=회의실(기본), false=공용설비/장비"),
+        category_id: z
+          .string()
+          .optional()
+          .describe("공용설비 분류 ID (conference_room=false 일 때만)"),
+      },
+    },
+    async ({ session_id, start_date, end_date, conference_room, category_id }) =>
+      withClient(session_id, async (client) => {
+        const res = await calendar.listFacilities(client, start_date, end_date, {
+          conferenceRoom: conference_room ?? true,
+          categoryId: category_id,
+        });
+        // Slim the payload: expose the fields a caller needs to pick one.
+        const facilities = (res.facilities ?? []).map((f: any) => ({
+          facilityId: f.facilityId,
+          facilityName: f.facilityName,
+          categoryName: f.categoryName,
+          categoryId: f.categoryId,
+          capacity: f.capacity,
+          description: f.description,
+        }));
+        return { ok: true, facilities, reserves: res.reserves ?? [] };
+      }),
+  );
+
   server.registerTool(
     "bizmeka_calendar_create",
     {
       description:
-        "새 일정을 등록한다. 현재 사용자가 참석자로 자동 추가된다. 주의: 실제로 " +
-        "캘린더에 일정이 생성되는 부작용이 있다. 반환은 { schedule_id }.",
+        "새 일정을 등록한다. 현재 사용자가 참석자로 자동 추가된다. 회의실/설비를 " +
+        "facility_ids 로 함께 예약할 수 있다. 주의: 실제로 캘린더에 일정이 생성되는 " +
+        "부작용이 있다. 반환은 { schedule_id }.",
       inputSchema: {
         session_id: z.string().describe("로그인된 세션 ID"),
         ...scheduleFields,
@@ -475,8 +557,15 @@ function buildServer(): McpServer {
       category_id,
       is_public,
       alarm_minutes,
+      facility_ids,
     }) =>
       withClient(session_id, async (client) => {
+        const facilities = await resolveFacilities(
+          client,
+          facility_ids,
+          start_date,
+          end_date,
+        );
         const { scheduleId } = await calendar.createSchedule(client, {
           title,
           startDate: start_date,
@@ -487,6 +576,7 @@ function buildServer(): McpServer {
           categoryId: category_id,
           schedulePublic: is_public,
           alarms: toAlarms(alarm_minutes),
+          facilities,
         });
         return { ok: true, schedule_id: scheduleId };
       }),
@@ -516,21 +606,31 @@ function buildServer(): McpServer {
       category_id,
       is_public,
       alarm_minutes,
+      facility_ids,
     }) =>
-      withClient(session_id, async (client) => ({
-        ok: true,
-        result: await calendar.updateSchedule(client, schedule_id, {
-          title,
-          startDate: start_date,
-          endDate: end_date,
-          contents,
-          place,
-          wholeday,
-          categoryId: category_id,
-          schedulePublic: is_public,
-          alarms: toAlarms(alarm_minutes),
-        }),
-      })),
+      withClient(session_id, async (client) => {
+        const facilities = await resolveFacilities(
+          client,
+          facility_ids,
+          start_date,
+          end_date,
+        );
+        return {
+          ok: true,
+          result: await calendar.updateSchedule(client, schedule_id, {
+            title,
+            startDate: start_date,
+            endDate: end_date,
+            contents,
+            place,
+            wholeday,
+            categoryId: category_id,
+            schedulePublic: is_public,
+            alarms: toAlarms(alarm_minutes),
+            facilities,
+          }),
+        };
+      }),
   );
 
   server.registerTool(
