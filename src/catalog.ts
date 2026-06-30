@@ -32,10 +32,10 @@ export const CATALOG: Record<string, ToolDoc> = {
   },
   bizmeka_login_start: {
     summary:
-      "KT 비즈메카 EZ 로그인 시작 — 1차 인증(아이디/비번 RSA 암호화). 기억된 신뢰 브라우저가 있으면 SMS 없이 즉시 로그인.",
+      "KT 비즈메카 EZ 로그인 시작 — 1차 인증(아이디/비번 RSA 암호화). 기억된 신뢰 브라우저가 있으면 SMS 없이 즉시 로그인. 한 번 로그인한 뒤에는 인자 없이 호출하면 마지막 계정으로 자동 로그인.",
     args: {
-      username: "비즈메카 아이디",
-      password: "비즈메카 비밀번호",
+      username: "비즈메카 아이디 (생략 시 마지막으로 기억된 계정)",
+      password: "비즈메카 비밀번호 (생략 시 저장된 비밀번호)",
     },
     returns:
       '{"ok": true, "session_id": "...", "logged_in": true|미정, "message": "..."}',

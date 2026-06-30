@@ -302,6 +302,22 @@ class TrustStore {
     }
   }
 
+  /**
+   * The most recently remembered account that still has a stored password,
+   * or null. Used so `bizmeka_login_start` can run with no username/password —
+   * it picks up the last account you logged in with.
+   */
+  mostRecentUsername(): string | null {
+    let best: { user: string; savedAt: number } | null = null;
+    for (const user of this.listUsernames()) {
+      const rec = this.read(user);
+      if (!rec?.password) continue; // need a password for unattended re-login
+      const savedAt = rec.savedAt ?? 0;
+      if (!best || savedAt > best.savedAt) best = { user, savedAt };
+    }
+    return best?.user ?? null;
+  }
+
   /** Forget a username's remembered cookies + password. */
   drop(username: string): void {
     try {

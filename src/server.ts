@@ -173,13 +173,42 @@ function buildServer(): McpServer {
         "이전에 로그인한 적이 있으면(신뢰 브라우저 기억됨) SMS 없이 바로 로그인이 완료되고 " +
         "logged_in=true 가 반환된다(이 경우 verify_otp 불필요). 그렇지 않으면 등록된 휴대폰으로 " +
         "SMS 인증번호를 발송하고, 반환된 session_id 와 인증번호로 bizmeka_verify_otp 를 호출한다. " +
-        "로그인 정보는 항상 기억되어 이후 무인 재로그인에 쓰인다(끄려면 bizmeka_logout).",
+        "로그인 정보는 항상 기억되어 이후 무인 재로그인에 쓰인다(끄려면 bizmeka_logout). " +
+        "한 번 로그인한 뒤에는 username/password 를 생략하고 호출하면 마지막으로 기억된 계정으로 자동 로그인한다.",
       inputSchema: {
-        username: z.string().describe("비즈메카 아이디"),
-        password: z.string().describe("비즈메카 비밀번호"),
+        username: z
+          .string()
+          .optional()
+          .describe("비즈메카 아이디 (생략 시 마지막으로 기억된 계정 사용)"),
+        password: z
+          .string()
+          .optional()
+          .describe("비즈메카 비밀번호 (생략 시 저장된 비밀번호 사용)"),
       },
     },
     async ({ username, password }) => {
+      // Resolve credentials: fall back to the remembered account when omitted.
+      if (!username) {
+        const remembered = trust.mostRecentUsername();
+        if (!remembered) {
+          return ok({
+            ok: false,
+            error:
+              "기억된 계정이 없습니다. 처음 로그인 시에는 username 과 password 를 지정하세요.",
+          });
+        }
+        username = remembered;
+      }
+      if (!password) {
+        const stored = trust.loadPassword(username);
+        if (!stored) {
+          return ok({
+            ok: false,
+            error: `'${username}' 의 저장된 비밀번호가 없습니다. password 를 지정하세요.`,
+          });
+        }
+        password = stored;
+      }
       const client = new BizmekaClient(username, password);
       // Always try a previously-remembered browser: load its cookies so the
       // 1st-factor can complete without SMS.
