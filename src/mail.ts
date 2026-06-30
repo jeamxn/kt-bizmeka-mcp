@@ -55,20 +55,81 @@ export function folderKey(client: BizmekaClient, folder: string): string {
   return `${prefix}_${client.username}`;
 }
 
+/**
+ * Heuristic: did this webmail response mean "your session is gone"?
+ * When the shared login/webmail session dies the server stops returning JSON
+ * and instead 302-redirects to SSO or serves a login/HTML page. With manual
+ * redirects (our HttpClient default) that surfaces as a 3xx/401/403, or as a
+ * 200 whose body is HTML (login page) rather than the expected JSON.
+ */
+function looksLikeSessionLoss(r: { status: number; text: string }): boolean {
+  if (r.status === 302 || r.status === 401 || r.status === 403) return true;
+  const head = r.text.slice(0, 600).toLowerCase();
+  if (
+    head.includes("loginform") ||
+    head.includes("ssologin") ||
+    head.includes("/login.do") ||
+    head.includes("secondstepverif")
+  ) {
+    return true;
+  }
+  // HTML where we asked for JSON (login/redirect page).
+  const trimmed = head.replace(/^\uFEFF/, "").trimStart();
+  if (trimmed.startsWith("<!doctype") || trimmed.startsWith("<html")) {
+    return true;
+  }
+  return false;
+}
+
+/** Put the freshly-issued _csrf token back into an outgoing form body. */
+function replaceCsrf(
+  data: Record<string, string> | Array<[string, string]>,
+  token: string,
+): void {
+  if (Array.isArray(data)) {
+    let found = false;
+    for (const pair of data) {
+      if (pair[0] === "_csrf") {
+        pair[1] = token;
+        found = true;
+      }
+    }
+    if (!found) data.push(["_csrf", token]);
+  } else if ("_csrf" in data) {
+    data._csrf = token;
+  }
+}
+
 async function postJson(
   client: BizmekaClient,
   path: string,
   data: Record<string, string> | Array<[string, string]>,
 ): Promise<any> {
-  const r = await client.http.post(WEBMAIL_BASE + path, {
-    headers: ajaxHeaders(true),
-    data,
-  });
+  const fire = () =>
+    client.http.post(WEBMAIL_BASE + path, { headers: ajaxHeaders(true), data });
+
+  let r = await fire();
+
+  // Session-refresh: if the session died mid-task, re-enter webmail via SAML
+  // SSO (no SMS needed while the ezsso master session is still alive), swap in
+  // the new _csrf, and retry the request exactly once.
+  if (looksLikeSessionLoss(r)) {
+    client.webmailCsrf = null;
+    const token = await client.enterWebmail(); // throws if real re-login needed
+    replaceCsrf(data, token);
+    r = await fire();
+  }
+
   if (r.status >= 400)
     throw new BizmekaError(`${path} 응답 오류 (status=${r.status})`);
   try {
     return JSON.parse(r.text);
   } catch {
+    if (looksLikeSessionLoss(r)) {
+      throw new BizmekaError(
+        "세션이 만료되었습니다. 다시 로그인하세요. (자동 재진입에 실패)",
+      );
+    }
     throw new BizmekaError(
       `${path} 응답을 JSON으로 파싱하지 못했습니다: ${r.text.slice(0, 200)}`,
     );
@@ -154,18 +215,36 @@ export async function markRead(
 // --------------------------------------------------------------------------
 // Write operations
 // --------------------------------------------------------------------------
+/**
+ * Open a compose draft (write.do) and return the server-issued dynamic tokens
+ * the send.do call must echo back: `tempKey` and `_dsptok`. The browser fetches
+ * these from write.do before every send; omitting them makes send.do 500.
+ */
 async function prepareWrite(
   client: BizmekaClient,
   ukey?: string,
-): Promise<string> {
+): Promise<{ tempKey: string; dsptok: string }> {
   const data: Record<string, string> = { first: "1" };
   if (ukey) data.ukey = ukey;
   const out = await postJson(client, "/mail/json/write.do", data);
-  const tempKey = out.MailWriteForm?.tempKey;
+  const form = out.MailWriteForm ?? {};
+  const tempKey = form.tempKey;
   if (!tempKey) {
     throw new BizmekaError("write.do에서 tempKey를 얻지 못했습니다.");
   }
-  return tempKey;
+  // _dsptok is a per-draft display token; key casing varies, so search the
+  // form for anything resembling dsptok and fall back to top-level.
+  const dsptok = findDsptok(form) ?? findDsptok(out) ?? "";
+  return { tempKey, dsptok };
+}
+
+/** Find a `*dsptok*` value anywhere in a (shallow) JSON object. */
+function findDsptok(obj: any): string | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  for (const [k, v] of Object.entries(obj)) {
+    if (/dsptok/i.test(k) && typeof v === "string" && v) return v;
+  }
+  return undefined;
 }
 
 export async function checkReceivers(
@@ -211,26 +290,59 @@ export async function sendMail(
     isReceipt = false,
   } = opts;
   const token = await requireWebmail(client);
-  const tempKey = await prepareWrite(client, replyUkey);
-  const data: Record<string, string> = {
-    tempKey,
-    first: "1",
-    to,
-    cc,
-    bcc,
-    subject,
-    body,
-    body_src: "",
-    fromname: fromname || client.username,
-    fromaddr: fromaddr || `${client.username}@bizmeka.com`,
-    attachments: "",
-    tempsave: "0",
-    is_receipt: isReceipt ? "1" : "0",
-    _is_receipt: isReceipt ? "1" : "0",
-    characterset: "UTF-8",
-    _csrf: token,
-  };
-  if (replyUkey) data.ukey = replyUkey;
+  const { tempKey, dsptok } = await prepareWrite(client, replyUkey);
+
+  // Mirror the browser's send.do body field-for-field. The earlier minimal
+  // payload (tempKey/to/subject/body/_csrf only) made the Spring controller
+  // 500 on bind — it expects the full form incl. checkbox marker fields
+  // (`_xxx=on`) and the per-draft `_dsptok`. Ordered as the browser sends it.
+  const today = new Date().toISOString().slice(0, 10); // yyyy-mm-dd (reserveTime)
+  const data: Array<[string, string]> = [
+    ["tempKey", tempKey],
+    ["ukey", replyUkey ?? ""],
+    ["first", "0"],
+    ["body", body],
+    ["body_src", ""],
+    ["tempsave", "0"],
+    ["attachments", ""],
+    ["reserverTime", ""],
+    ["mail_cancel_time", "0"],
+    ["approval_flag", "0"],
+    ["use_sign_showup", "0"],
+    ["myTemplateKey", ""],
+    ["use_bigfile_password", "1"],
+    ["_dsptok", dsptok],
+    ["apUser", ""],
+    ["fromname", fromname || client.username],
+    ["fromaddr", fromaddr || `${client.username}@bizmeka.com`],
+    ["_tome", "on"],
+    ["to", to],
+    ["cc", cc],
+    ["bcc", bcc],
+    ["subject", subject],
+    ["secureHint", ""],
+    ["secureValue", ""],
+    ["_is_each", "on"],
+    ["_important", "on"],
+    ["_use_sign", "on"],
+    ["sign", ""],
+    ["reserveTime", today],
+    ["is_secure", "0"],
+    ["is_receiptmail", "0"],
+    // Spring checkbox: send the value only when on; the `_is_receipt` marker is
+    // always present so the binder resets it to false when the value is absent.
+    ...(isReceipt ? ([["is_receipt", "1"]] as Array<[string, string]>) : []),
+    ["_is_receipt", "on"],
+    ["is_save", "1"],
+    ["_is_save", "on"],
+    ["characterset", "utf-8"],
+    ["paper_cpage", ""],
+    ["selectPaper", "0"],
+    ["selectTemplate", "0"],
+    ["bigfileSecureValue", ""],
+    ["prevHtml", ""],
+    ["_csrf", token],
+  ];
   return postJson(client, "/mail/json/send.do", data);
 }
 
