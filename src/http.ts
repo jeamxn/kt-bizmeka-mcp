@@ -129,6 +129,8 @@ export interface RequestOptions {
   headers?: Record<string, string>;
   /** form-urlencoded body. Arrays of [key,value] allow repeated keys. */
   data?: Record<string, string> | Array<[string, string]>;
+  /** Raw request body (e.g. a JSON string). Mutually exclusive with `data`. */
+  body?: string;
   params?: Record<string, string | number>;
   followRedirects?: boolean;
   maxRedirects?: number;
@@ -168,6 +170,7 @@ export class HttpClient {
       method = "GET",
       headers = {},
       data,
+      body: rawBody,
       params,
       followRedirects = false,
       maxRedirects = 10,
@@ -187,7 +190,9 @@ export class HttpClient {
       "Accept-Language": "ko-KR,ko;q=0.9",
       ...headers,
     };
-    if (data !== undefined) {
+    if (rawBody !== undefined) {
+      body = rawBody;
+    } else if (data !== undefined) {
       body = encodeForm(data);
       if (!hasHeader(baseHeaders, "content-type")) {
         baseHeaders["Content-Type"] = "application/x-www-form-urlencoded";

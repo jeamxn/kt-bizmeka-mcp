@@ -1,6 +1,6 @@
 {
   "name": "kt-bizmeka-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server for KT bizmeka EZ (ezsso/ezportal) login automation — RSA credential encryption, CSRF handling, SMS 2FA, SAML SSO, and webmail. TypeScript/Bun port.",
   "type": "module",
   "license": "MIT",

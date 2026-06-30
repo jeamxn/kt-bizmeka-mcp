@@ -130,6 +130,99 @@ export const CATALOG: Record<string, ToolDoc> = {
     returns: '{"ok": true, "result": {...}}',
     notes: "수신자가 읽기 전에만 가능. mail_receipts 의 available_cancel 로 확인.",
   },
+  bizmeka_calendar_list: {
+    summary: "기간 내 내 일정 목록 조회 (그룹웨어 캘린더/플래너).",
+    args: {
+      session_id: "로그인된 세션 ID",
+      start_date: "조회 시작일 (예: 2026-06-01)",
+      end_date: "조회 종료일 (예: 2026-06-30)",
+    },
+    returns:
+      '{"ok": true, "user": {userId, userName, teamName}, "events": [{scheduleId, title, startDate, endDate, ...}]}',
+    notes:
+      "startDate/endDate 는 epoch millis 로 변환되어 조회된다. events 의 각 scheduleId 를 다른 캘린더 툴에 넘긴다. user 는 현재 사용자 정보.",
+  },
+  bizmeka_calendar_search: {
+    summary: "키워드로 일정 검색.",
+    args: {
+      session_id: "로그인된 세션 ID",
+      start_date: "검색 시작일",
+      end_date: "검색 종료일",
+      keyword: "검색어 (선택)",
+      search_fields: "검색 대상 필드 (기본 title, 예: 'title,contents')",
+      page: "페이지 번호 (기본 1)",
+    },
+    returns: '{"ok": true, "result": {...}}',
+    notes: "",
+  },
+  bizmeka_calendar_get: {
+    summary: "일정 1건의 상세 조회.",
+    args: {
+      session_id: "로그인된 세션 ID",
+      schedule_id: "일정 ID (list/search 결과의 scheduleId)",
+    },
+    returns:
+      '{"ok": true, "schedule": {scheduleId, title, place, contents, startDate, endDate, wholeday, categoryName, registerName, ...}}',
+    notes: "startDate/endDate 는 epoch millis.",
+  },
+  bizmeka_calendar_create: {
+    summary: "새 일정 등록. 실제로 캘린더에 생성되는 부작용 있음.",
+    args: {
+      session_id: "로그인된 세션 ID",
+      title: "일정 제목",
+      start_date: "시작 일시 ('2026-07-02 14:00' 또는 ISO). 종일이면 날짜만",
+      end_date: "종료 일시",
+      contents: "내용/메모 (선택)",
+      place: "장소 (선택)",
+      wholeday: "종일 일정 여부 (선택)",
+      category_id: "분류 ID (선택, 기본 '1'=업무)",
+      is_public: "공개 일정 여부 (선택)",
+      alarm_minutes: "미리 알림(분) 배열 (선택, 예: [30, 15])",
+    },
+    returns: '{"ok": true, "schedule_id": "..."}',
+    notes:
+      "현재 사용자가 참석자로 자동 추가된다. 시간 입력은 별도 표기가 없으면 UTC 로 해석되니, KST 라면 ISO 오프셋(예: 2026-07-02T14:00:00+09:00)으로 주는 것이 안전하다. 실제 생성되므로 사용자 확인 권장.",
+  },
+  bizmeka_calendar_update: {
+    summary: "기존 일정 수정 (전체 덮어쓰기).",
+    args: {
+      session_id: "로그인된 세션 ID",
+      schedule_id: "수정할 일정 ID",
+      title: "일정 제목",
+      start_date: "시작 일시",
+      end_date: "종료 일시",
+      contents: "내용 (선택)",
+      place: "장소 (선택)",
+      wholeday: "종일 여부 (선택)",
+      category_id: "분류 ID (선택)",
+      is_public: "공개 여부 (선택)",
+      alarm_minutes: "미리 알림(분) 배열 (선택)",
+    },
+    returns: '{"ok": true, "result": {...}}',
+    notes:
+      "부분 수정이 아니라 전체 필드를 원하는 최종값으로 보낸다. 먼저 calendar_get 으로 현재 값을 읽어 병합하라. 시간만 옮길 거면 calendar_move 가 간편.",
+  },
+  bizmeka_calendar_move: {
+    summary: "일정의 시작/종료 시간만 변경 (나머지 필드 유지).",
+    args: {
+      session_id: "로그인된 세션 ID",
+      schedule_id: "일정 ID",
+      start_date: "새 시작 일시",
+      end_date: "새 종료 일시",
+      wholeday: "종일 여부 (선택)",
+    },
+    returns: '{"ok": true, "result": {...}}',
+    notes: "제목·내용·장소 등은 그대로 두고 시간만 바꾼다.",
+  },
+  bizmeka_calendar_delete: {
+    summary: "일정 삭제. 실제로 삭제되는 부작용 있음.",
+    args: {
+      session_id: "로그인된 세션 ID",
+      schedule_id: "삭제할 일정 ID",
+    },
+    returns: '{"ok": true, "result": {"success": "success"}}',
+    notes: "되돌릴 수 없다. 호출 전 사용자 확인 권장.",
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -171,6 +264,21 @@ export const WORKFLOWS: Record<string, Workflow> = {
       "bizmeka_mail_send(session_id, to, subject, body, reply_ukey=...) → 발송",
       "bizmeka_mail_receipts(session_id)             → 수신확인 상태",
       "bizmeka_mail_cancel_send(session_id, mail_key) → (필요시) 발송취소",
+    ],
+  },
+  calendar: {
+    title: "일정 관리 (캘린더/플래너)",
+    description:
+      "그룹웨어(ezgroupware) 캘린더의 일정을 조회/등록/수정/삭제한다. 첫 호출 시 " +
+      "자동으로 그룹웨어 SSO 진입 + CSRF 토큰을 확보한다. 생성/수정/삭제는 실제 " +
+      "부작용이 있으니 사용자 확인을 권장한다.",
+    steps: [
+      "bizmeka_calendar_list(session_id, start_date, end_date) → 일정 목록 + scheduleId",
+      "bizmeka_calendar_get(session_id, schedule_id)           → (선택) 상세 확인",
+      "bizmeka_calendar_create(session_id, title, start_date, end_date, ...) → 등록",
+      "bizmeka_calendar_update(session_id, schedule_id, ...)   → 수정 (전체 덮어쓰기)",
+      "bizmeka_calendar_move(session_id, schedule_id, start_date, end_date) → 시간만 이동",
+      "bizmeka_calendar_delete(session_id, schedule_id)        → 삭제",
     ],
   },
 };

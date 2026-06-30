@@ -25,9 +25,10 @@ import { renderOverview, renderTool } from "./catalog.ts";
 import { BizmekaClient } from "./client.ts";
 import { BizmekaError } from "./errors.ts";
 import * as mail from "./mail.ts";
+import * as calendar from "./calendar.ts";
 import { store } from "./session.ts";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 const INSTRUCTIONS =
   "KT 비즈메카 EZ 자동화 MCP. 로그인 자동화를 비롯해 포털 기능 툴이 점진적으로 " +
@@ -359,6 +360,219 @@ function buildServer(): McpServer {
       withClient(session_id, async (client) => ({
         ok: true,
         result: await mail.cancelSend(client, mail_key),
+      })),
+  );
+
+  // ===================== CALENDAR / PLANNER TOOLS ========================
+  server.registerTool(
+    "bizmeka_calendar_list",
+    {
+      description:
+        "기간 내 내 일정 목록을 조회한다. 날짜는 'YYYY-MM-DD' 또는 ISO/epoch 허용. " +
+        "반환에 현재 사용자 정보(user)와 일정 배열(events: scheduleId/title/startDate/endDate 등)이 포함된다.",
+      inputSchema: {
+        session_id: z.string().describe("로그인된 세션 ID"),
+        start_date: z.string().describe("조회 시작일 (예: 2026-06-01)"),
+        end_date: z.string().describe("조회 종료일 (예: 2026-06-30)"),
+      },
+    },
+    async ({ session_id, start_date, end_date }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        ...(await calendar.listSchedules(client, start_date, end_date)),
+      })),
+  );
+
+  server.registerTool(
+    "bizmeka_calendar_search",
+    {
+      description: "키워드로 일정을 검색한다 (제목 기본).",
+      inputSchema: {
+        session_id: z.string().describe("로그인된 세션 ID"),
+        start_date: z.string().describe("검색 시작일"),
+        end_date: z.string().describe("검색 종료일"),
+        keyword: z.string().optional().describe("검색어"),
+        search_fields: z
+          .string()
+          .optional()
+          .describe("검색 대상 필드 (기본 title, 예: 'title,contents')"),
+        page: z.number().int().optional().describe("페이지 번호 (기본 1)"),
+      },
+    },
+    async ({ session_id, start_date, end_date, keyword, search_fields, page }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        result: await calendar.searchSchedules(client, {
+          startDate: start_date,
+          endDate: end_date,
+          keyword,
+          searchFields: search_fields,
+          pageNumber: page,
+        }),
+      })),
+  );
+
+  server.registerTool(
+    "bizmeka_calendar_get",
+    {
+      description: "일정 1건의 상세 정보를 조회한다.",
+      inputSchema: {
+        session_id: z.string().describe("로그인된 세션 ID"),
+        schedule_id: z.string().describe("일정 ID (목록/검색 결과의 scheduleId)"),
+      },
+    },
+    async ({ session_id, schedule_id }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        schedule: await calendar.getSchedule(client, schedule_id),
+      })),
+  );
+
+  const scheduleFields = {
+    title: z.string().describe("일정 제목"),
+    start_date: z
+      .string()
+      .describe("시작 일시 ('YYYY-MM-DD HH:mm' 또는 ISO). 종일이면 날짜만"),
+    end_date: z.string().describe("종료 일시"),
+    contents: z.string().optional().describe("내용/메모"),
+    place: z.string().optional().describe("장소"),
+    wholeday: z.boolean().optional().describe("종일 일정 여부"),
+    category_id: z
+      .string()
+      .optional()
+      .describe("분류 ID (기본 '1'=업무)"),
+    is_public: z.boolean().optional().describe("공개 일정 여부"),
+    alarm_minutes: z
+      .array(z.number().int())
+      .optional()
+      .describe("미리 알림(분) 목록. 예: [30, 15]. 비우면 알림 없음"),
+  };
+
+  function toAlarms(mins?: number[]) {
+    // observed alarmType: "2"=popup, "3"=mail; default to popup ("2").
+    return (mins ?? []).map((m) => ({ type: "2", minutes: String(m) }));
+  }
+
+  server.registerTool(
+    "bizmeka_calendar_create",
+    {
+      description:
+        "새 일정을 등록한다. 현재 사용자가 참석자로 자동 추가된다. 주의: 실제로 " +
+        "캘린더에 일정이 생성되는 부작용이 있다. 반환은 { schedule_id }.",
+      inputSchema: {
+        session_id: z.string().describe("로그인된 세션 ID"),
+        ...scheduleFields,
+      },
+    },
+    async ({
+      session_id,
+      title,
+      start_date,
+      end_date,
+      contents,
+      place,
+      wholeday,
+      category_id,
+      is_public,
+      alarm_minutes,
+    }) =>
+      withClient(session_id, async (client) => {
+        const { scheduleId } = await calendar.createSchedule(client, {
+          title,
+          startDate: start_date,
+          endDate: end_date,
+          contents,
+          place,
+          wholeday,
+          categoryId: category_id,
+          schedulePublic: is_public,
+          alarms: toAlarms(alarm_minutes),
+        });
+        return { ok: true, schedule_id: scheduleId };
+      }),
+  );
+
+  server.registerTool(
+    "bizmeka_calendar_update",
+    {
+      description:
+        "기존 일정을 수정한다. 모든 필드를 원하는 최종 상태로 전달한다 (부분 수정이 " +
+        "아니라 전체 덮어쓰기). 시간만 옮기려면 bizmeka_calendar_move 를 쓰라.",
+      inputSchema: {
+        session_id: z.string().describe("로그인된 세션 ID"),
+        schedule_id: z.string().describe("수정할 일정 ID"),
+        ...scheduleFields,
+      },
+    },
+    async ({
+      session_id,
+      schedule_id,
+      title,
+      start_date,
+      end_date,
+      contents,
+      place,
+      wholeday,
+      category_id,
+      is_public,
+      alarm_minutes,
+    }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        result: await calendar.updateSchedule(client, schedule_id, {
+          title,
+          startDate: start_date,
+          endDate: end_date,
+          contents,
+          place,
+          wholeday,
+          categoryId: category_id,
+          schedulePublic: is_public,
+          alarms: toAlarms(alarm_minutes),
+        }),
+      })),
+  );
+
+  server.registerTool(
+    "bizmeka_calendar_move",
+    {
+      description:
+        "일정의 시간(시작/종료)만 변경한다. 제목·내용 등 나머지는 그대로 둔다.",
+      inputSchema: {
+        session_id: z.string().describe("로그인된 세션 ID"),
+        schedule_id: z.string().describe("일정 ID"),
+        start_date: z.string().describe("새 시작 일시"),
+        end_date: z.string().describe("새 종료 일시"),
+        wholeday: z.boolean().optional().describe("종일 여부"),
+      },
+    },
+    async ({ session_id, schedule_id, start_date, end_date, wholeday }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        result: await calendar.moveScheduleTime(
+          client,
+          schedule_id,
+          start_date,
+          end_date,
+          wholeday ?? false,
+        ),
+      })),
+  );
+
+  server.registerTool(
+    "bizmeka_calendar_delete",
+    {
+      description:
+        "일정을 삭제한다. 주의: 실제로 캘린더에서 일정이 삭제되는 부작용이 있다.",
+      inputSchema: {
+        session_id: z.string().describe("로그인된 세션 ID"),
+        schedule_id: z.string().describe("삭제할 일정 ID"),
+      },
+    },
+    async ({ session_id, schedule_id }) =>
+      withClient(session_id, async (client) => ({
+        ok: true,
+        result: await calendar.deleteSchedule(client, schedule_id),
       })),
   );
 

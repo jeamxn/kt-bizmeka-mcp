@@ -18,6 +18,7 @@ import { BizmekaError } from "./errors.ts";
 export const SSO_BASE = "https://ezsso.bizmeka.com";
 export const PORTAL_BASE = "https://ezportal.bizmeka.com";
 export const WEBMAIL_BASE = "https://ezwebmail.bizmeka.com";
+export const GROUPWARE_BASE = "https://ezgroupware.bizmeka.com";
 
 // Regexes against /loginForm.do
 const RE_MODULUS = /id="sproKeyModulus"\s+value="([0-9a-fA-F]+)"/;
@@ -69,12 +70,15 @@ export interface ClientState {
   ctx: LoginContext | null;
   cookies: Cookie[];
   webmailCsrf: string | null;
+  groupwareCsrf?: string | null;
 }
 
 export class BizmekaClient {
   readonly http: HttpClient;
   private ctx: LoginContext | null = null;
   webmailCsrf: string | null = null;
+  /** ezgroupware CSRFGuard page token (from JavaScriptServlet), cached. */
+  groupwareCsrf: string | null = null;
 
   constructor(
     public readonly username: string,
@@ -356,6 +360,7 @@ export class BizmekaClient {
       ctx: this.ctx,
       cookies: this.http.cookies.dump(),
       webmailCsrf: this.webmailCsrf,
+      groupwareCsrf: this.groupwareCsrf,
     };
   }
 
@@ -364,6 +369,7 @@ export class BizmekaClient {
     const client = new BizmekaClient(state.username, "");
     client.ctx = state.ctx;
     client.webmailCsrf = state.webmailCsrf;
+    client.groupwareCsrf = state.groupwareCsrf ?? null;
     client.http.cookies.load(state.cookies);
     return client;
   }
@@ -407,5 +413,85 @@ export class BizmekaClient {
       if (m) return m[1]!;
     }
     return "";
+  }
+
+  // ===================== GROUPWARE (ezgroupware / planner) =============
+  /**
+   * Enter the groupware service via SAML SP-initiated SSO and capture the
+   * CSRFGuard page token (served by /JavaScriptServlet, same mechanism as the
+   * ezsso login). Cached in `groupwareCsrf`. The planner JSON APIs additionally
+   * need a per-request token from getAjaxToken() (see below); both are sent in
+   * the OWASP_CSRFTOKEN header as "<ajaxToken>, <pageToken>".
+   *
+   * Verified live: planner entry → JavaScriptServlet → getAjaxToken → CRUD.
+   */
+  async enterGroupware(): Promise<string> {
+    const r = await this.http.get(
+      `${GROUPWARE_BASE}/groupware/planner/calendar.do?`,
+      { followRedirects: true },
+    );
+    // Follow the SAML auto-post chain to establish the ezgroupware session.
+    await this.followSamlChain(r.text, `${GROUPWARE_BASE}/`);
+    const js = await this.http.get(`${GROUPWARE_BASE}/JavaScriptServlet`, {
+      headers: {
+        Accept: "*/*",
+        Referer: `${GROUPWARE_BASE}/groupware/planner/calendar.do?`,
+      },
+    });
+    const m = RE_CSRF.exec(js.text);
+    if (!m) {
+      throw new BizmekaError(
+        "그룹웨어 진입 실패: CSRF 페이지 토큰을 찾지 못했습니다.",
+      );
+    }
+    this.groupwareCsrf = m[1]!;
+    return this.groupwareCsrf;
+  }
+
+  /** Ensure the groupware page token is available (enter lazily if needed). */
+  async requireGroupware(): Promise<string> {
+    return this.groupwareCsrf ?? (await this.enterGroupware());
+  }
+
+  /**
+   * Fetch a fresh per-request CSRFGuard token. The planner write endpoints
+   * (create/update/delete) reject a stale/missing one. GET feeds are happy with
+   * just the page token, but using a fresh ajax token everywhere is safe.
+   */
+  async groupwareAjaxToken(): Promise<string> {
+    const pageToken = await this.requireGroupware();
+    const r = await this.http.post(
+      `${GROUPWARE_BASE}/support/csrf/getAjaxToken.do`,
+      {
+        headers: {
+          Accept: "*/*",
+          OWASP_CSRFTOKEN: pageToken,
+          Referer: `${GROUPWARE_BASE}/groupware/planner/calendar.do?`,
+          "X-Requested-With": "XMLHttpRequest, OWASP CSRFGuard Project",
+        },
+      },
+    );
+    const tok = r.text.trim();
+    if (!/^[A-Z0-9-]{20,}$/.test(tok)) {
+      throw new BizmekaError(
+        `그룹웨어 ajax 토큰 발급 실패 (status=${r.status})`,
+      );
+    }
+    return tok;
+  }
+
+  /** Standard header set for a planner API call. `tok` is a per-request token. */
+  groupwareHeaders(tok: string, json = false): Record<string, string> {
+    const pageToken = this.groupwareCsrf ?? "";
+    return {
+      Accept: "application/json, text/javascript, */*; q=0.01",
+      OWASP_CSRFTOKEN: `${tok}, ${pageToken}`,
+      Origin: GROUPWARE_BASE,
+      Referer: `${GROUPWARE_BASE}/groupware/planner/calendar.do?`,
+      "X-Requested-With": "XMLHttpRequest, OWASP CSRFGuard Project",
+      "Content-Type": json
+        ? "application/json; charset=UTF-8"
+        : "application/x-www-form-urlencoded; charset=UTF-8",
+    };
   }
 }
