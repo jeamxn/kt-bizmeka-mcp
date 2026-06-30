@@ -67,6 +67,12 @@ export interface LoginContext {
  */
 export interface ClientState {
   username: string;
+  /**
+   * The account password. Persisted so a freshly-spawned stdio process (e.g.
+   * verify_otp, or an auto re-login after the server session dies) can use it
+   * without re-prompting. Optional for backward compat with older state files.
+   */
+  password?: string;
   ctx: LoginContext | null;
   cookies: Cookie[];
   webmailCsrf: string | null;
@@ -82,7 +88,7 @@ export class BizmekaClient {
 
   constructor(
     public readonly username: string,
-    private readonly password: string,
+    public readonly password: string,
     timeoutMs = 20000,
   ) {
     this.http = new HttpClient(timeoutMs);
@@ -319,6 +325,19 @@ export class BizmekaClient {
   }
 
   /**
+   * Detect the bizmeka SSO login form. When a server session has expired, the
+   * SAML chain ends here instead of on the requested app page. Requires two
+   * independent markers to avoid false positives on ordinary pages.
+   */
+  static isLoginPage(html: string): boolean {
+    let hits = 0;
+    for (const m of ['name="j_username"', 'type="password"', "loginForm"]) {
+      if (html.includes(m)) hits++;
+    }
+    return hits >= 2;
+  }
+
+  /**
    * Given an HTML body that may contain a SAML auto-post form, submit it and
    * keep following further SAML auto-post forms / redirects until a normal page
    * is reached. Returns the final HTML body.
@@ -370,6 +389,7 @@ export class BizmekaClient {
   dumpState(): ClientState {
     return {
       username: this.username,
+      password: this.password,
       ctx: this.ctx,
       cookies: this.http.cookies.dump(),
       webmailCsrf: this.webmailCsrf,
@@ -377,9 +397,9 @@ export class BizmekaClient {
     };
   }
 
-  /** Rebuild a client from a snapshot. Password is unknown post-1st-factor (unused here). */
+  /** Rebuild a client from a snapshot. Restores the password when present. */
   static restore(state: ClientState): BizmekaClient {
-    const client = new BizmekaClient(state.username, "");
+    const client = new BizmekaClient(state.username, state.password ?? "");
     client.ctx = state.ctx;
     client.webmailCsrf = state.webmailCsrf;
     client.groupwareCsrf = state.groupwareCsrf ?? null;
@@ -398,13 +418,26 @@ export class BizmekaClient {
       { followRedirects: true },
     );
     let body = await this.followSamlChain(r.text, `${WEBMAIL_BASE}/`);
+    // A dead server session bounces the SAML chain back to the login form.
+    // Detect it up front so withClient() can auto re-login (no SMS) — the login
+    // page can also carry a _csrf, which would otherwise mask the dead session.
+    if (BizmekaClient.isLoginPage(body)) {
+      throw new BizmekaError(
+        "세션이 만료되었습니다. 다시 로그인하세요. (웹메일 SSO가 로그인 페이지로 리다이렉트됨)",
+      );
+    }
     let token = BizmekaClient.extractWebmailCsrf(body);
     if (!token) {
       const r2 = await this.http.get(
         `${WEBMAIL_BASE}/mail/list.do?_entityId=ezwebmail.bizmeka.com`,
         { followRedirects: true },
       );
-      body = r2.text;
+      body = await this.followSamlChain(r2.text, `${WEBMAIL_BASE}/`);
+      if (BizmekaClient.isLoginPage(body)) {
+        throw new BizmekaError(
+          "세션이 만료되었습니다. 다시 로그인하세요. (웹메일 SSO가 로그인 페이지로 리다이렉트됨)",
+        );
+      }
       token = BizmekaClient.extractWebmailCsrf(body);
     }
     if (!token) {
@@ -444,7 +477,15 @@ export class BizmekaClient {
       { followRedirects: true },
     );
     // Follow the SAML auto-post chain to establish the ezgroupware session.
-    await this.followSamlChain(r.text, `${GROUPWARE_BASE}/`);
+    const landing = await this.followSamlChain(r.text, `${GROUPWARE_BASE}/`);
+    // If the SSO bounced us back to the login form, the server session is dead.
+    // Surface a recognizable error so the caller can trigger an unattended
+    // re-login (browserCertify cookie + stored password → no SMS).
+    if (BizmekaClient.isLoginPage(landing)) {
+      throw new BizmekaError(
+        "세션이 만료되었습니다. 다시 로그인하세요. (그룹웨어 SSO가 로그인 페이지로 리다이렉트됨)",
+      );
+    }
     const js = await this.http.get(`${GROUPWARE_BASE}/JavaScriptServlet`, {
       headers: {
         Accept: "*/*",

@@ -32,11 +32,17 @@ export const CATALOG: Record<string, ToolDoc> = {
   },
   bizmeka_login_start: {
     summary:
-      "KT 비즈메카 EZ 로그인 시작 — 1차 인증(아이디/비번 RSA 암호화) 후 등록된 휴대폰으로 SMS 인증번호 발송.",
-    args: { username: "비즈메카 아이디", password: "비즈메카 비밀번호" },
-    returns: '{"ok": true, "session_id": "...", "message": "..."}',
+      "KT 비즈메카 EZ 로그인 시작 — 1차 인증(아이디/비번 RSA 암호화). 기억된 신뢰 브라우저가 있으면 SMS 없이 즉시 로그인.",
+    args: {
+      username: "비즈메카 아이디",
+      password: "비즈메카 비밀번호",
+      remember_me:
+        "(선택, 기본 true) 저장된 신뢰 쿠키로 SMS 생략 로그인 시도 + 성공 시 무인 재로그인용으로 쿠키·비번 저장",
+    },
+    returns:
+      '{"ok": true, "session_id": "...", "logged_in": true|미정, "message": "..."}',
     notes:
-      "반환된 session_id 를 bizmeka_verify_otp 에 그대로 넘겨야 한다. 인증번호 유효시간 약 3분.",
+      "logged_in:true 면 SMS 없이 이미 로그인된 것 — verify_otp 불필요. 그렇지 않으면 SMS가 발송되니 받은 번호로 bizmeka_verify_otp 를 호출. 인증번호 유효시간 약 3분.",
   },
   bizmeka_verify_otp: {
     summary: "SMS 인증번호로 2차 인증 완료 + SAML SSO → 포털(ezportal) 진입.",
@@ -54,6 +60,18 @@ export const CATALOG: Record<string, ToolDoc> = {
     returns:
       '{"ok": true, "authenticated": bool, "logged_in": bool, "portal_url": "..."}',
     notes: "로그인 완료 후 세션이 살아있는지 확인할 때 사용.",
+  },
+  bizmeka_logout: {
+    summary:
+      "저장된 로그인 정보(신뢰 쿠키 + 비밀번호) 삭제. 무인 재로그인을 끊는다.",
+    args: {
+      username: "(선택) 로그아웃할 아이디",
+      session_id: "(선택) 함께 정리할 세션 ID. 미지정 시 username 으로 대상 결정",
+      all: "(선택) true 면 저장된 모든 계정 정보 삭제",
+    },
+    returns: '{"ok": true, "forgot_usernames": [...], "session_cleared": bool}',
+    notes:
+      "username/session_id/all 중 하나는 지정해야 한다. 삭제 후에는 다시 SMS 인증부터 로그인해야 한다.",
   },
   bizmeka_mail_folders: {
     summary: "웹메일 메일함(폴더) 목록과 메일 수 조회.",
@@ -249,12 +267,16 @@ export const WORKFLOWS: Record<string, Workflow> = {
     title: "로그인 (2단계 인증)",
     description:
       "비즈메카는 SMS 2차 인증이 필수라, 사람이 인증번호를 읽는 단계가 끼어 " +
-      "있다. 따라서 로그인은 두 번의 툴 호출로 나뉜다.",
+      "있다. 따라서 로그인은 두 번의 툴 호출로 나뉜다. 단, 한 번 " +
+      "verify_otp(remember_browser=true)로 인증해두면 이후엔 신뢰 브라우저 쿠키 + " +
+      "저장된 비밀번호로 SMS 없이 자동 재로그인된다(서버 세션이 죽어도 툴 호출 시 " +
+      "투명하게 복구). bizmeka_logout 으로 이 저장 정보를 지울 수 있다.",
     steps: [
-      "bizmeka_login_start(username, password)  → SMS 발송, session_id 수령",
-      "(사용자가 휴대폰 SMS 인증번호 확인)",
-      "bizmeka_verify_otp(session_id, cert_key) → 2차 인증 + SSO, 포털 진입",
+      "bizmeka_login_start(username, password)  → 기억된 신뢰 브라우저 있으면 즉시 logged_in:true, 없으면 SMS 발송 + session_id 수령",
+      "(SMS가 발송된 경우) 사용자가 휴대폰 인증번호 확인",
+      "bizmeka_verify_otp(session_id, cert_key, remember_browser=true) → 2차 인증 + SSO, 포털 진입 + 무인 재로그인 정보 저장",
       "bizmeka_session_status(session_id)       → (선택) 로그인 상태 확인",
+      "bizmeka_logout(username 또는 session_id, all)  → 저장된 로그인 정보 삭제(무인 재로그인 차단)",
     ],
   },
   read_mail: {

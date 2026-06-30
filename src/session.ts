@@ -218,6 +218,9 @@ import type { Cookie } from "./http.ts";
 
 interface TrustFile {
   username: string;
+  /** Account password, stored so a dead server session can be re-logged-in
+   *  unattended (no SMS thanks to the browserCertify cookies below). */
+  password?: string;
   cookies: Cookie[];
   savedAt: number;
 }
@@ -240,11 +243,19 @@ function trustFileFor(username: string): string {
 
 class TrustStore {
   /** Persist the long-lived "remembered browser" cookies for a username. */
-  save(username: string, cookies: Cookie[]): void {
+  /** Persist the long-lived "remembered browser" cookies (+ password) for a user. */
+  save(username: string, cookies: Cookie[], password?: string): void {
     try {
+      // Preserve an existing password if this save omits one.
+      const prev = this.read(username);
       writeFileSync(
         trustFileFor(username),
-        JSON.stringify({ username, cookies, savedAt: Date.now() } as TrustFile),
+        JSON.stringify({
+          username,
+          password: password ?? prev?.password,
+          cookies,
+          savedAt: Date.now(),
+        } as TrustFile),
         { mode: 0o600 },
       );
     } catch {
@@ -252,19 +263,46 @@ class TrustStore {
     }
   }
 
-  /** Load remembered cookies for a username, or null if none saved. */
-  load(username: string): Cookie[] | null {
+  /** Read the full trust record for a username, or null. */
+  read(username: string): TrustFile | null {
     try {
-      const data = JSON.parse(
+      return JSON.parse(
         readFileSync(trustFileFor(username), "utf8"),
       ) as TrustFile;
-      return data.cookies ?? null;
     } catch {
       return null;
     }
   }
 
-  /** Forget a username's remembered cookies (e.g. after they stop working). */
+  /** Load remembered cookies for a username, or null if none saved. */
+  load(username: string): Cookie[] | null {
+    return this.read(username)?.cookies ?? null;
+  }
+
+  /** Load the stored password for a username, or null. */
+  loadPassword(username: string): string | null {
+    return this.read(username)?.password ?? null;
+  }
+
+  /** List usernames that currently have remembered credentials. */
+  listUsernames(): string[] {
+    try {
+      return readdirSync(trustDir())
+        .filter((n) => n.endsWith(".json"))
+        .map((n) => {
+          try {
+            return Buffer.from(n.slice(0, -5), "base64url").toString("utf8");
+          } catch {
+            return "";
+          }
+        })
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Forget a username's remembered cookies + password. */
   drop(username: string): void {
     try {
       unlinkSync(trustFileFor(username));

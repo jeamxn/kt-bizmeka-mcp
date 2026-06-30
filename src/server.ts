@@ -69,12 +69,55 @@ function loggedInClient(
   return { client: sess.client, err: null };
 }
 
+/** Heuristic: does this error/text indicate the server-side session died? */
+function isSessionDead(msg: string): boolean {
+  return (
+    msg.includes("세션이 만료") ||
+    msg.includes("세션이 존재") ||
+    msg.includes("로그인되지 않은") ||
+    msg.includes("다시 로그인")
+  );
+}
+
 /**
- * Run a webmail operation on the logged-in client for `sessionId`, then persist
- * the (possibly refreshed: webmail _csrf, JSESSIONID cookies) client state back
- * to disk. Because stdio hosts spawn a fresh process per tool call, saving here
- * lets the next call skip the SAML webmail re-entry. `fn` returns the payload
- * object to send (without ok wrapping).
+ * Attempt an unattended re-login for a client whose server session died.
+ * Works WITHOUT SMS when the client carries a browserCertify cookie + password
+ * (persisted in the session/trust store). Returns true on success.
+ *
+ * Strategy: try the in-jar browserCertify cookies first; if that still demands
+ * 2FA (cookie expired) fall back to the trust store's cookies for this user.
+ */
+async function tryRelogin(client: BizmekaClient): Promise<boolean> {
+  if (!client.password) return false;
+  // Reset any cached service tokens; cookies (incl. browserCertify) are kept.
+  client.webmailCsrf = null;
+  client.groupwareCsrf = null;
+  try {
+    const { needs2fa } = await client.submitCredentials();
+    if (!needs2fa) return true;
+  } catch {
+    /* fall through to trust-store cookies */
+  }
+  // Reload remembered cookies for this user and retry once.
+  const trusted = trust.load(client.username);
+  if (trusted) {
+    client.loadCookies(trusted);
+    try {
+      const { needs2fa } = await client.submitCredentials();
+      if (!needs2fa) return true;
+    } catch {
+      /* give up — caller surfaces the original error */
+    }
+  }
+  return false;
+}
+
+/**
+ * Run a webmail/planner operation on the logged-in client for `sessionId`, then
+ * persist the (possibly refreshed) client state back to disk. Because stdio
+ * hosts spawn a fresh process per tool call, saving here lets the next call
+ * skip re-entry. If the server session has died, transparently re-logs in
+ * (no SMS, via the stored browserCertify cookie + password) and retries once.
  */
 async function withClient(
   sessionId: string,
@@ -87,6 +130,17 @@ async function withClient(
     store.save(sessionId, client!);
     return ok(payload);
   } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // Server session likely dead — try an unattended re-login + one retry.
+    if (isSessionDead(msg) && (await tryRelogin(client!))) {
+      try {
+        const payload = await fn(client!);
+        store.save(sessionId, client!, { authenticated: true });
+        return ok(payload);
+      } catch (e2) {
+        return ok(errPayload(e2));
+      }
+    }
     return ok(errPayload(e));
   }
 }
@@ -143,7 +197,9 @@ function buildServer(): McpServer {
         const { needs2fa } = await client.submitCredentials();
         if (!needs2fa) {
           // Trusted-browser fast path: already logged in, no SMS needed.
-          if (remember) trust.save(username, client.dumpCookies());
+          if (remember) {
+            trust.save(username, client.dumpCookies(), password);
+          }
           const sid = store.create(client, "");
           store.save(sid, client, { authenticated: true });
           return ok({
@@ -235,7 +291,11 @@ function buildServer(): McpServer {
         });
         // If the user opted in, remember this browser so future logins skip SMS.
         if (remember_browser) {
-          trust.save(sess.client.username, sess.client.dumpCookies());
+          trust.save(
+            sess.client.username,
+            sess.client.dumpCookies(),
+            sess.client.password,
+          );
         }
         return ok({
           ok: true,
@@ -266,6 +326,66 @@ function buildServer(): McpServer {
         authenticated: sess.authenticated,
         logged_in: sess.client.isLoggedIn,
         portal_url: sess.portalUrl,
+      });
+    },
+  );
+
+  server.registerTool(
+    "bizmeka_logout",
+    {
+      description:
+        "저장된 로그인 정보를 삭제한다. 기억된 신뢰 브라우저 쿠키와 비밀번호(무인 재로그인용)를 " +
+        "지우고, 활성 세션도 함께 정리한다. 이후 다시 쓰려면 SMS 인증부터 새로 로그인해야 한다.",
+      inputSchema: {
+        username: z
+          .string()
+          .optional()
+          .describe("로그아웃할 계정 아이디. session_id 로도 지정 가능."),
+        session_id: z
+          .string()
+          .optional()
+          .describe("정리할 세션 ID (선택). 주면 해당 세션도 삭제한다."),
+        all: z
+          .boolean()
+          .optional()
+          .describe("True 면 저장된 모든 계정의 기억 정보를 삭제한다."),
+      },
+    },
+    async ({ username, session_id, all }) => {
+      const dropped: string[] = [];
+      if (all) {
+        for (const u of trust.listUsernames()) {
+          trust.drop(u);
+          dropped.push(u);
+        }
+      } else {
+        // Resolve username from the session if not given explicitly.
+        let user = username;
+        if (!user && session_id) {
+          const sess = store.get(session_id);
+          user = sess?.client.username;
+        }
+        if (user) {
+          trust.drop(user);
+          dropped.push(user);
+        }
+      }
+      if (session_id) store.drop(session_id);
+      if (dropped.length === 0 && !session_id) {
+        return ok({
+          ok: false,
+          error:
+            "로그아웃할 대상을 찾지 못했습니다. username, session_id, 또는 all=true 중 하나를 지정하세요.",
+        });
+      }
+      return ok({
+        ok: true,
+        forgot_usernames: dropped,
+        session_cleared: Boolean(session_id),
+        message:
+          dropped.length > 0
+            ? `저장된 로그인 정보를 삭제했습니다: ${dropped.join(", ")}`
+            : "세션을 정리했습니다.",
       });
     },
   );
