@@ -234,20 +234,25 @@ function buildServer(): McpServer {
         await client.loadSecondStep();
         await client.sendSms(); // SMS to registered phone
       } catch (e) {
-        // A stale trust cookie can break 1st-factor; retry once cleanly.
-        if (trust.load(username)) {
-          trust.drop(username);
+        // 1st-factor failed even with the remembered cookies. Retry ONCE with a
+        // clean cookie jar (no stale session cookies). Crucially we do NOT drop
+        // the persisted trust here — the durable browserCertify cookie is what
+        // lets future logins skip SMS, and this failure may be transient. It is
+        // only refreshed on a successful login below.
+        const hadTrust = Boolean(trust.load(username));
+        if (hadTrust) {
           const fresh = new BizmekaClient(username, password);
           try {
             const { needs2fa } = await fresh.submitCredentials();
             if (!needs2fa) {
+              trust.save(username, fresh.dumpCookies(), password);
               const sid = store.create(fresh, "");
               store.save(sid, fresh, { authenticated: true });
               return ok({
                 ok: true,
                 session_id: sid,
                 logged_in: true,
-                message: "로그인 완료 (신뢰 쿠키 갱신 필요).",
+                message: "신뢰 브라우저로 SMS 없이 로그인 완료. 바로 사용 가능합니다 (verify_otp 불필요).",
               });
             }
             await fresh.loadSecondStep();

@@ -13,7 +13,7 @@
 
 import { HttpClient, type Cookie } from "./http.ts";
 import { RSAEncryptor } from "./crypto.ts";
-import { BizmekaError } from "./errors.ts";
+import { AlreadyLoggedInError, BizmekaError } from "./errors.ts";
 
 export const SSO_BASE = "https://ezsso.bizmeka.com";
 export const PORTAL_BASE = "https://ezportal.bizmeka.com";
@@ -105,7 +105,18 @@ export class BizmekaClient {
 
   // -- step 1: fetch login form + RSA key + password suffix --------------
   private async loadLoginContext(): Promise<LoginContext> {
-    const r = await this.http.get(`${SSO_BASE}/loginForm.do`);
+    // Don't auto-follow redirects: when a trusted/active SSO session already
+    // exists, loginForm.do answers 302 → /sso/ssoLogin.do (i.e. "already
+    // authenticated, no form for you"). Following it lands on a page with no
+    // RSA key and used to blow up as "RSA public key not found".
+    const r = await this.http.get(`${SSO_BASE}/loginForm.do`, {
+      followRedirects: false,
+    });
+    const loc = r.headers.get("location") ?? "";
+    if (r.status >= 300 && r.status < 400 && loc.includes("ssoLogin")) {
+      // Already logged in via the remembered browser — no credentials needed.
+      throw new AlreadyLoggedInError();
+    }
     if (r.status >= 400)
       throw new BizmekaError(`loginForm.do 응답 오류 (status=${r.status})`);
     const html = r.text;
@@ -153,7 +164,15 @@ export class BizmekaClient {
    *     `isLogin=Y` is already set; the caller can use the session directly.
    */
   async submitCredentials(): Promise<{ needs2fa: boolean }> {
-    const ctx = await this.loadLoginContext();
+    let ctx: LoginContext;
+    try {
+      ctx = await this.loadLoginContext();
+    } catch (e) {
+      // Remembered browser is already authenticated (loginForm.do → ssoLogin.do).
+      // Treat as a completed, SMS-free login.
+      if (e instanceof AlreadyLoggedInError) return { needs2fa: false };
+      throw e;
+    }
     const rsa = new RSAEncryptor(ctx.modulus, ctx.exponent);
     const securedUser = rsa.encrypt(this.username);
     const securedPw = rsa.encrypt(this.password) + ctx.passwordSuffix;
