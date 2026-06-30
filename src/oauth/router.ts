@@ -43,11 +43,19 @@ export function createRouter(): OAuthRouter {
       if (req.method === "OPTIONS" && p !== "/mcp" && p !== "/mcp/") {
         return cors();
       }
+      // Discovery metadata. RFC 9728 / RFC 8414 + the MCP spec let clients probe
+      // path-aware variants, e.g. when the resource is https://host/mcp the
+      // client may GET /.well-known/oauth-protected-resource/mcp (path inserted
+      // after the well-known segment). Match the base path AND any suffix so
+      // both the bare and path-aware forms resolve (Claude probes the suffixed
+      // form first when adding the connector).
+      if (p.startsWith("/.well-known/oauth-authorization-server")) {
+        return authServerMetadata(req);
+      }
+      if (p.startsWith("/.well-known/oauth-protected-resource")) {
+        return protectedResourceMetadata(req);
+      }
       switch (p) {
-        case "/.well-known/oauth-authorization-server":
-          return authServerMetadata(req);
-        case "/.well-known/oauth-protected-resource":
-          return protectedResourceMetadata(req);
         case "/register":
           if (req.method === "POST") return registerClient(req);
           return new Response("Method Not Allowed", { status: 405 });
